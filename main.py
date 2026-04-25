@@ -48,16 +48,25 @@ class Quote_Plugin(Star):
             os.environ.get("QUOTE_COLLECTOR_PLUS_DATA_ROOT")
             or os.environ.get("QUOTE_COLLOCTER_PLUS_DATA_ROOT")
         )
-        raw_root = config_root or env_root or "data"
+        if config_root or env_root:
+            raw_root = config_root or env_root
+        else:
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
+            plugins_dir = os.path.dirname(plugin_dir)
+            maybe_data_dir = os.path.dirname(plugins_dir)
+            if os.path.basename(plugins_dir) == "plugins" and os.path.basename(maybe_data_dir) == "data":
+                raw_root = maybe_data_dir
+            else:
+                raw_root = "data"
         data_root = os.path.abspath(os.path.expanduser(raw_root))
-        logger.info(f"quote_collector_plus 数据根目录: {data_root} (配置优先，其次环境变量，最后默认值)")
+        logger.info(f"quote_collector_plus 数据根目录: {data_root} (配置优先，其次环境变量，然后自动识别，最后兜底默认值)")
         return data_root
 
     def _ensure_dir(self, path: str, desc: str = "目录"):
         try:
             os.makedirs(path, exist_ok=True)
         except Exception as e:
-            logger.error(f"创建{desc}失败: {path}，错误: {type(e).__name__}: {e}")
+            logger.error(f"创建 {desc} 失败: {path}，错误: {type(e).__name__}: {e}")
             raise
 
     def _check_storage_writable(self):
