@@ -1,2 +1,5 @@
 __pycache__/
 *.py[cod]
+.npm-cache/
+output-playground-*.png
+output-t2i-*.jpg

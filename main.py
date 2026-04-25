@@ -31,14 +31,12 @@ class Quote_Plugin(Star):
     BUBBLE_CONTAINER_EXTRA_WIDTH = 90
 
     TMPL = '''
-<style>html { margin: 0; padding: 0; background: transparent; } body { margin: 0; padding: 0; display: inline-block; background: transparent; }</style>
-<div style="display:inline-flex;align-items:flex-start;gap:10px;padding:12px;background:transparent;max-width:{{ container_max_width }}px;box-sizing:border-box;">
+<style>html { margin: 0; padding: 0; background: transparent; width: fit-content; height: fit-content; } body { margin: 0; padding: 0; display: inline-block; background: transparent; width: fit-content; height: fit-content; overflow: hidden; }</style>
+<div id="quote-card" style="display:inline-flex;align-items:flex-start;gap:10px;padding:12px;background:transparent;width:fit-content;max-width:{{ container_max_width }}px;box-sizing:border-box;">
   <img src="{{ avatar }}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;" />
   <div style="display:flex;flex-direction:column;align-items:flex-start;max-width:{{ text_container_max_width }}px;">
-    <div style="font-size:14px;color:#8c8c8c;line-height:1.4;margin-bottom:6px;">{{ name }}</div>
-                <div style="display:inline-block;background:#ffffff;border-radius:0 16px 16px 16px;padding:{{ bubble_padding }};color:#111111;font-size:{{ font_size }}px;line-height:{{ line_height }};white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;box-shadow:0 1px 2px rgba(0,0,0,0.06);width:fit-content;min-width:{{ min_width }}px;max-width:{{ max_width }}px;box-sizing:border-box;">
-      {{ text }}
-    </div>
+    <div style="font-size:14px;color:#8c8c8c;line-height:1.4;margin-bottom:6px;">{{- name -}}</div>
+    <div style="display:inline-block;background:#ffffff;border-radius:0 16px 16px 16px;padding:{{ bubble_padding }};color:#111111;font-size:{{ font_size }}px;line-height:{{ line_height }};white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;box-shadow:0 1px 2px rgba(0,0,0,0.06);width:fit-content;min-width:{{ min_width }}px;max-width:{{ max_width }}px;box-sizing:border-box;">{{- text -}}</div>
   </div>
 </div>
 '''
