@@ -3,7 +3,7 @@
 
 > Fork 自 [litsum/astrbot_plugin_quote_collocter](https://github.com/litsum/astrbot_plugin_quote_collocter)
 
-##注意
+## 注意
 本插件由AI史量级生成,有问题请直接转给AI
 
 ## 使用方法
