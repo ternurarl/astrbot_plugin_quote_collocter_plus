@@ -238,7 +238,7 @@ class Quote_Plugin(Star):
             # 保存
             group_folder = os.path.join(self.quotes_data_path, str(group_id))
             os.makedirs(group_folder, exist_ok=True)
-            out_path = os.path.join(group_folder, f"quote_bubble_{int(time.time() * 1000)}.jpg")
+            out_path = os.path.join(group_folder, f"quote_bubble_{int(time.time() * 1000)}_{random.randint(1000, 9999)}.jpg")
             canvas.save(out_path, format="JPEG", quality=95)
             return out_path
         except Exception as e:
