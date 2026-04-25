@@ -59,7 +59,7 @@ class Quote_Plugin(Star):
             else:
                 raw_root = "data"
         data_root = os.path.abspath(os.path.expanduser(raw_root))
-        logger.info(f"quote_collector_plus 数据根目录: {data_root} (配置优先，其次环境变量，然后自动识别，最后兜底默认值)")
+        logger.info(f"quote_collector_plus 数据根目录：{data_root}（配置优先，其次环境变量，然后自动识别，最后兜底默认值）")
         return data_root
 
     def _ensure_dir(self, path: str, desc: str = "目录"):
