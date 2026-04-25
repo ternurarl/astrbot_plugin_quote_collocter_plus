@@ -17,3 +17,29 @@
 
 ## 注意事项
 图片投稿没有限制，请自己注意审核
+
+## 数据目录配置（Windows / Docker）
+插件会将图片与群配置统一存放在：
+
+`<data_root>/quotes_data/<group_id>/`
+
+其中 `data_root` 的优先级如下：
+1. AstrBot 配置项：`quote_collector_plus_data_root`（兼容旧拼写 `quote_collocter_plus_data_root`）
+2. 环境变量：`QUOTE_COLLECTOR_PLUS_DATA_ROOT`（兼容旧拼写 `QUOTE_COLLOCTER_PLUS_DATA_ROOT`）
+3. 自动识别：若插件位于 `.../data/plugins/<plugin>`，则默认使用上级 `.../data`
+4. 兜底默认值：`data`（即默认目录为 `data/quotes_data/...`）
+
+插件启动时会输出最终生效的绝对路径，并检查目录是否可写。
+
+### Windows 部署建议
+- 建议将 `data_root` 指向固定目录（例如 `D:\astrbot_data`），避免工作目录变化导致数据分散。
+- 请确保运行账号对该目录有读写权限。
+
+### Docker 部署建议
+- AstrBot 官方 compose 默认挂载为：`./data:/AstrBot/data`。
+- 本插件在该官方部署方式下可开箱即用，无需额外配置环境变量。
+- 若你自定义了挂载目录，再按需设置 `QUOTE_COLLECTOR_PLUS_DATA_ROOT`。
+
+### 迁移说明
+- 若你此前使用默认 `data/quotes_data`，可直接将旧目录整体拷贝到新的 `<data_root>/quotes_data` 下完成迁移。
+- 目录结构保持不变即可，无需改动群号子目录内容。

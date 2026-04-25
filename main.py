@@ -22,10 +22,14 @@ except ImportError:
 class Quote_Plugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        self.quotes_data_path = os.path.join('data', "quotes_data")
         
         # 从 astrbot 配置文件中获取管理员ID列表
         bot_config = context.get_config()
+        self.data_root_path = self._resolve_data_root(bot_config)
+        self.quotes_data_path = os.path.join(self.data_root_path, "quotes_data")
+        self.create_main_folder()
+        self._check_storage_writable()
+
         admins = bot_config.get("admins_id", [])
         # 确保所有ID都是字符串格式
         self.admins = [str(admin) for admin in admins] if admins else []
@@ -34,20 +38,68 @@ class Quote_Plugin(Star):
             logger.info(f'从 astrbot 配置中获取到管理员ID列表: {self.admins}')
         else:
             logger.warning('未找到任何管理员ID，某些需要管理员权限的命令可能无法使用')
+    
+    def _resolve_data_root(self, bot_config):
+        config_root = (
+            bot_config.get("quote_collector_plus_data_root")
+            or bot_config.get("quote_collocter_plus_data_root")
+        )
+        env_root = (
+            os.environ.get("QUOTE_COLLECTOR_PLUS_DATA_ROOT")
+            or os.environ.get("QUOTE_COLLOCTER_PLUS_DATA_ROOT")
+        )
+        if config_root or env_root:
+            raw_root = config_root or env_root
+        else:
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
+            plugins_dir = os.path.dirname(plugin_dir)
+            maybe_data_dir = os.path.dirname(plugins_dir)
+            if os.path.basename(plugins_dir) == "plugins" and os.path.basename(maybe_data_dir) == "data":
+                raw_root = maybe_data_dir
+            else:
+                raw_root = "data"
+        data_root = os.path.abspath(os.path.expanduser(raw_root))
+        logger.info(f"quote_collector_plus 数据根目录：{data_root}（配置优先，其次环境变量，然后自动识别，最后兜底默认值）")
+        return data_root
+
+    def _ensure_dir(self, path: str, desc: str = "目录"):
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception as e:
+            logger.error(f"创建 {desc} 失败: {path}，错误: {type(e).__name__}: {e}")
+            raise
+
+    def _check_storage_writable(self):
+        try:
+            self._ensure_dir(self.quotes_data_path, "语录主目录")
+            probe_file = os.path.join(self.quotes_data_path, ".write_probe")
+            with open(probe_file, "wb") as f:
+                f.write(b"ok")
+            os.remove(probe_file)
+        except Exception as e:
+            logger.error(
+                f"语录存储目录不可写：{self.quotes_data_path}，请检查 Windows 权限或 Docker 挂载读写权限。错误：{type(e).__name__}: {e}"
+            )
+
+    def _group_folder_path(self, group_id):
+        return os.path.join(self.quotes_data_path, str(group_id))
+
+    def _admin_settings_file_path(self, group_id):
+        return os.path.join(self._group_folder_path(group_id), 'admin_settings.yml')
+
+    def _new_quote_image_path(self, group_id, prefix: str = "image", ext: str = ".jpg"):
+        filename = f"{prefix}_{int(time.time() * 1000)}_{random.randint(1000, 9999)}{ext}"
+        return os.path.join(self._group_folder_path(group_id), filename)
 
     #region 数据管理
     def create_main_folder(self):
-        target_folder = os.path.join('data', "quotes_data")
-        if not os.path.exists(target_folder):
-            os.makedirs(target_folder)
+        self._ensure_dir(self.quotes_data_path, "语录主目录")
 
     def create_group_folder(self, group_id):
         group_id = str(group_id)
-        if not os.path.exists(self.quotes_data_path):
-            self.create_main_folder()
-        group_folder_path = os.path.join(self.quotes_data_path, group_id)
-        if not os.path.exists(group_folder_path):
-            os.makedirs(group_folder_path)
+        self.create_main_folder()
+        group_folder_path = self._group_folder_path(group_id)
+        self._ensure_dir(group_folder_path, "群语录目录")
         
     def random_image_from_folder(self, folder_path):
         if not os.path.exists(folder_path): # 增加判断文件夹是否存在的逻辑
@@ -236,9 +288,9 @@ class Quote_Plugin(Star):
                 ty += line_heights[i] + line_gap
 
             # 保存
-            group_folder = os.path.join(self.quotes_data_path, str(group_id))
-            os.makedirs(group_folder, exist_ok=True)
-            out_path = os.path.join(group_folder, f"quote_bubble_{int(time.time() * 1000)}_{random.randint(1000, 9999)}.jpg")
+            group_folder = self._group_folder_path(group_id)
+            self._ensure_dir(group_folder, "群语录目录")
+            out_path = self._new_quote_image_path(group_id, prefix="quote_bubble", ext=".jpg")
             canvas.save(out_path, format="JPEG", quality=95)
             return out_path
         except Exception as e:
@@ -273,9 +325,8 @@ class Quote_Plugin(Star):
                     try:
                         with open(file_path, 'rb') as f:
                             data = f.read()
-                            filename = f"image_{int(time.time() * 1000)}.jpg"
-                            file_path = os.path.join("data", "quotes_data", group_id, filename)
-                            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                            file_path = self._new_quote_image_path(group_id, prefix="image", ext=".jpg")
+                            self._ensure_dir(os.path.dirname(file_path), "图片保存目录")
                             with open(file_path, 'wb') as f:
                                 f.write(data)
                                 logger.info(f"图片已保存到 {file_path}")
@@ -297,9 +348,8 @@ class Quote_Plugin(Star):
                     try:
                         with open(file_path, 'rb') as f:
                             data = f.read()
-                            filename = f"image_{int(time.time() * 1000)}.jpg"
-                            save_path = os.path.join("data", "quotes_data", group_id, filename)
-                            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                            save_path = self._new_quote_image_path(group_id, prefix="image", ext=".jpg")
+                            self._ensure_dir(os.path.dirname(save_path), "图片保存目录")
                             with open(save_path, 'wb') as f:
                                 f.write(data)
                                 logger.info(f"图片已保存到 {save_path}")
@@ -319,9 +369,8 @@ class Quote_Plugin(Star):
                             async with session.get(url) as response:
                                 if response.status == 200:
                                     data = await response.read()
-                                    filename = f"image_{int(time.time() * 1000)}.jpg"
-                                    file_path = os.path.join("data", "quotes_data", group_id, filename)
-                                    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                                    file_path = self._new_quote_image_path(group_id, prefix="image", ext=".jpg")
+                                    self._ensure_dir(os.path.dirname(file_path), "图片保存目录")
                                     with open(file_path, 'wb') as f:
                                         f.write(data)
                                         logger.info(f"图片已保存到 {file_path}")
@@ -342,11 +391,11 @@ class Quote_Plugin(Star):
         message_obj = event.message_obj
         raw_message = message_obj.raw_message
         msg = event.message_str.strip()
-        group_folder_path = os.path.join(self.quotes_data_path, group_id)
+        group_folder_path = self._group_folder_path(group_id)
 
         if not os.path.exists(group_folder_path):
             self.create_group_folder(group_id)
-        self.admin_settings_path = os.path.join(group_folder_path, 'admin_settings.yml') 
+        self.admin_settings_path = self._admin_settings_file_path(group_id)
         if not os.path.exists(self.admin_settings_path):
             self._create_admin_settings_file()
         self.admin_settings = self._load_admin_settings()
@@ -391,7 +440,7 @@ class Quote_Plugin(Star):
         
         # --- 随机语录指令 ---
         elif msg == "/语录" or msg == "语录":
-            group_folder_path = os.path.join(self.quotes_data_path, group_id)
+            group_folder_path = self._group_folder_path(group_id)
             selected_image_path = None
             if os.path.exists(group_folder_path):
                 selected_image_path = self.random_image_from_folder(group_folder_path)
@@ -527,7 +576,7 @@ class Quote_Plugin(Star):
 
                 if not os.path.exists(group_folder_path):
                     self.create_group_folder(group_id)
-                self.admin_settings_path = os.path.join(group_folder_path, 'admin_settings.yml') 
+                self.admin_settings_path = self._admin_settings_file_path(group_id)
                 if not os.path.exists(self.admin_settings_path):
                     self._create_admin_settings_file()
                 self.admin_settings = self._load_admin_settings()
@@ -540,7 +589,7 @@ class Quote_Plugin(Star):
                     self._save_admin_settings()
                     if str(target_id) == str(bot_id):
                         if random.random() < 0.85:
-                            group_folder_path = os.path.join(self.quotes_data_path, group_id)
+                            group_folder_path = self._group_folder_path(group_id)
                             selected_image_path = None
                             if os.path.exists(group_folder_path):
                                 selected_image_path = self.random_image_from_folder(group_folder_path)
