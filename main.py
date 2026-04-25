@@ -41,16 +41,16 @@ class Quote_Plugin(Star):
     
     def _resolve_data_root(self, bot_config):
         config_root = (
-            bot_config.get("quote_collocter_plus_data_root")
-            or bot_config.get("quote_collector_plus_data_root")
+            bot_config.get("quote_collector_plus_data_root")
+            or bot_config.get("quote_collocter_plus_data_root")
         )
         env_root = (
-            os.environ.get("QUOTE_COLLOCTER_PLUS_DATA_ROOT")
-            or os.environ.get("QUOTE_COLLECTOR_PLUS_DATA_ROOT")
+            os.environ.get("QUOTE_COLLECTOR_PLUS_DATA_ROOT")
+            or os.environ.get("QUOTE_COLLOCTER_PLUS_DATA_ROOT")
         )
         raw_root = config_root or env_root or "data"
         data_root = os.path.abspath(os.path.expanduser(raw_root))
-        logger.info(f"quote_collocter_plus 数据根目录: {data_root} (配置优先，其次环境变量，最后默认值)")
+        logger.info(f"quote_collector_plus 数据根目录: {data_root} (配置优先，其次环境变量，最后默认值)")
         return data_root
 
     def _ensure_dir(self, path: str, desc: str = "目录"):
@@ -91,7 +91,6 @@ class Quote_Plugin(Star):
         self.create_main_folder()
         group_folder_path = self._group_folder_path(group_id)
         self._ensure_dir(group_folder_path, "群语录目录")
-        return group_folder_path
         
     def random_image_from_folder(self, folder_path):
         if not os.path.exists(folder_path): # 增加判断文件夹是否存在的逻辑
