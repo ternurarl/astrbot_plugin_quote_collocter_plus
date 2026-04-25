@@ -725,7 +725,12 @@ class Quote_Plugin(Star):
                     if bubble_path and os.path.exists(bubble_path):
                         yield event.chain_result([Reply(id=msg_id), Plain(text="⭐入典成功（已生成气泡语录图）！")])
                     else:
-                        yield event.plain_result("⭐投稿失败：生成气泡语录图失败")
+                        if not _PIL_AVAILABLE:
+                            yield event.plain_result("⭐投稿失败：当前环境未安装 Pillow，无法进行“引用文本转图”，请先安装 pillow。")
+                        elif (self.render_config.get("style") or "").strip().lower() in {"off", "none", "disable", "disabled"}:
+                            yield event.plain_result("⭐投稿失败：当前已关闭“引用文本转图”渲染，可在配置中开启渲染风格。")
+                        else:
+                            yield event.plain_result("⭐投稿失败：生成气泡语录图失败")
                 except Exception as e:
                     logger.error(f"生成气泡语录图过程出错: {e}")
                     yield event.plain_result(f"⭐投稿失败: {str(e)}")
