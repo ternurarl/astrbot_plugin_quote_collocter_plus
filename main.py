@@ -286,7 +286,7 @@ class Quote_Plugin(Star):
             return len(text) * 16
 
     def _safe_text_height(self, draw, text: str, font):
-        probe = text or "测"
+        probe = text or "M"
         try:
             bbox = draw.textbbox((0, 0), probe, font=font)
             return max(28, bbox[3] - bbox[1])
@@ -348,7 +348,10 @@ class Quote_Plugin(Star):
         if not out:
             return ["（无文本内容）"]
         if out and len(lines) > len(out):
-            out[-1] = (out[-1][:-1] + "…") if out[-1] else "…"
+            if len(out[-1]) > 1:
+                out[-1] = out[-1][:-1] + "…"
+            else:
+                out[-1] = (out[-1] or "") + "…"
         return out
 
     def _build_avatar_image(self, avatar_bytes, avatar_size: int):
@@ -491,7 +494,7 @@ class Quote_Plugin(Star):
                     draw.text((tx, ty), safe_ln, fill=(34, 40, 52), font=font)
                 except Exception:
                     logger.warning(f"文本绘制失败，已回退替换字符: {safe_ln[:30]}")
-                    fallback_ln = safe_ln.encode("utf-8", "replace").decode("utf-8")
+                    fallback_ln = "".join(ch if ch.isprintable() else "�" for ch in safe_ln)
                     draw.text((tx, ty), fallback_ln, fill=(34, 40, 52), font=font)
                 ty += layout["line_heights"][i] + layout["line_gap"]
 
