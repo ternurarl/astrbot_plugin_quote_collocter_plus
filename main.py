@@ -78,7 +78,7 @@ class Quote_Plugin(Star):
             os.remove(probe_file)
         except Exception as e:
             logger.error(
-                f"语录存储目录不可写: {self.quotes_data_path}，请检查 Windows 权限或 Docker 挂载读写权限。错误: {type(e).__name__}: {e}"
+                f"语录存储目录不可写：{self.quotes_data_path}，请检查 Windows 权限或 Docker 挂载读写权限。错误：{type(e).__name__}: {e}"
             )
 
     def _group_folder_path(self, group_id):
