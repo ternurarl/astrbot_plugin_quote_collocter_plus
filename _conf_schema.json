@@ -1,0 +1,61 @@
+{
+  "admin_ids": {
+    "description": "插件管理员 QQ 号列表",
+    "type": "list",
+    "hint": "可使用投稿权限、戳戳冷却等管理命令。留空时可继续使用 AstrBot 全局管理员。建议填写字符串 QQ 号。",
+    "default": []
+  },
+  "use_global_admins": {
+    "description": "同时使用 AstrBot 全局管理员",
+    "type": "bool",
+    "hint": "开启后会把 AstrBot 全局配置中的 admins_id 合并为本插件管理员。",
+    "default": true
+  },
+  "data_path": {
+    "description": "语录图片保存目录",
+    "type": "string",
+    "hint": "相对 AstrBot 工作目录的路径。修改后只影响新读写位置，不会自动迁移旧图片。",
+    "default": "data/quotes_data"
+  },
+  "default_permission_mode": {
+    "description": "新群默认投稿权限",
+    "type": "int",
+    "hint": "0：关闭投稿系统；1：仅管理员可投稿；2：全体成员均可投稿。群内使用“投稿权限”设置后会优先使用群内设置。",
+    "default": 0,
+    "options": [
+      0,
+      1,
+      2
+    ]
+  },
+  "default_poke_cooldown": {
+    "description": "默认戳戳冷却时间",
+    "type": "int",
+    "hint": "单位为秒。群内使用“戳戳冷却”设置后会优先使用群内设置。",
+    "default": 10
+  },
+  "enable_poke_reply": {
+    "description": "启用戳一戳随机语录",
+    "type": "bool",
+    "hint": "关闭后，被戳一戳时不再发送随机语录或提示文本。",
+    "default": true
+  },
+  "poke_quote_probability": {
+    "description": "戳一戳发送语录概率",
+    "type": "float",
+    "hint": "范围 0 到 1。默认 0.85 表示 85% 概率发送语录，剩余概率发送提示文本。",
+    "default": 0.85
+  },
+  "allow_text_quote_render": {
+    "description": "允许引用文本转图片投稿",
+    "type": "bool",
+    "hint": "开启后，引用纯文本并发送“语录投稿”或“入典”会生成聊天气泡图片保存。",
+    "default": true
+  },
+  "text_quote_max_length": {
+    "description": "文本投稿最大字符数",
+    "type": "int",
+    "hint": "引用文本转图片时的最大字符数，超出会截断。",
+    "default": 3000
+  }
+}

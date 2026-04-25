@@ -11,11 +11,12 @@ import unicodedata
 from PIL import Image as PILImage
 from urllib.parse import urlparse
 from astrbot import logger
+from astrbot.api import AstrBotConfig
 from astrbot.core.message.components import Image, Reply, At, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.api.all import *
 
-@register("quote_collocter_plus", "ternurarl", "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.2")
+@register("quote_collocter_plus", "ternurarl", "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.3")
 class Quote_Plugin(Star):
     BUBBLE_MIN_WIDTH = 140
     BUBBLE_MAX_WIDTH = 640
@@ -42,24 +43,76 @@ class Quote_Plugin(Star):
 </div>
 '''
 
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
-        self.quotes_data_path = os.path.join('data', "quotes_data")
-        
-        # 从 astrbot 配置文件中获取管理员ID列表
-        bot_config = context.get_config()
-        admins = bot_config.get("admins_id", [])
-        # 确保所有ID都是字符串格式
-        self.admins = [str(admin) for admin in admins] if admins else []
+        self.config = config or {}
+        self.quotes_data_path = self._get_config_str("data_path", os.path.join("data", "quotes_data"))
+        self.default_permission_mode = self._get_config_int("default_permission_mode", 0, min_value=0, max_value=2)
+        self.default_poke_cooldown = self._get_config_int("default_poke_cooldown", 10, min_value=0)
+        self.poke_quote_probability = self._get_config_float("poke_quote_probability", 0.85, min_value=0.0, max_value=1.0)
+        self.enable_poke_reply = self._get_config_bool("enable_poke_reply", True)
+        self.allow_text_quote_render = self._get_config_bool("allow_text_quote_render", True)
+        self.BUBBLE_TEXT_MAX_LENGTH = self._get_config_int("text_quote_max_length", self.BUBBLE_TEXT_MAX_LENGTH, min_value=1)
+
+        plugin_admins = self._normalize_admin_ids(self.config.get("admin_ids", []))
+        global_admins = []
+        if self._get_config_bool("use_global_admins", True):
+            bot_config = context.get_config()
+            global_admins = self._normalize_admin_ids(bot_config.get("admins_id", []))
+        self.admins = sorted(set(plugin_admins + global_admins))
         
         if self.admins:
-            logger.info(f'从 astrbot 配置中获取到管理员ID列表: {self.admins}')
+            logger.info(f'获取到插件管理员ID列表: {self.admins}')
         else:
             logger.warning('未找到任何管理员ID，某些需要管理员权限的命令可能无法使用')
 
+    def _get_config_str(self, key, default):
+        value = self.config.get(key, default)
+        if value is None:
+            return default
+        value = str(value).strip()
+        return value or default
+
+    def _get_config_bool(self, key, default):
+        value = self.config.get(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "启用", "开启"}
+        return bool(value)
+
+    def _get_config_int(self, key, default, min_value=None, max_value=None):
+        try:
+            value = int(self.config.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    def _get_config_float(self, key, default, min_value=None, max_value=None):
+        try:
+            value = float(self.config.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    def _normalize_admin_ids(self, admins):
+        if not admins:
+            return []
+        if isinstance(admins, (str, int)):
+            admins = [admins]
+        return [str(admin).strip() for admin in admins if str(admin).strip()]
+
     #region 数据管理
     def create_main_folder(self):
-        target_folder = os.path.join('data', "quotes_data")
+        target_folder = self.quotes_data_path
         if not os.path.exists(target_folder):
             os.makedirs(target_folder)
 
@@ -88,7 +141,10 @@ class Quote_Plugin(Star):
 
     def _create_admin_settings_file(self):
         try:
-            default_data = {'mode': 0}
+            default_data = {
+                'mode': self.default_permission_mode,
+                'coldown': self.default_poke_cooldown
+            }
             with open(self.admin_settings_path, 'w', encoding='utf-8') as f:
                 yaml.dump(default_data, f)
         except Exception as e:
@@ -243,7 +299,7 @@ class Quote_Plugin(Star):
             return None
 
         filename = f"image_{uuid.uuid4().hex}.png"
-        save_path = os.path.join("data", "quotes_data", group_id, filename)
+        save_path = os.path.join(self.quotes_data_path, group_id, filename)
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
         try:
@@ -325,7 +381,7 @@ class Quote_Plugin(Star):
                         with open(file_path, 'rb') as f:
                             data = f.read()
                             filename = f"image_{int(time.time() * 1000)}.jpg"
-                            file_path = os.path.join("data", "quotes_data", group_id, filename)
+                            file_path = os.path.join(self.quotes_data_path, group_id, filename)
                             os.makedirs(os.path.dirname(file_path), exist_ok=True)
                             with open(file_path, 'wb') as f:
                                 f.write(data)
@@ -349,7 +405,7 @@ class Quote_Plugin(Star):
                         with open(file_path, 'rb') as f:
                             data = f.read()
                             filename = f"image_{int(time.time() * 1000)}.jpg"
-                            save_path = os.path.join("data", "quotes_data", group_id, filename)
+                            save_path = os.path.join(self.quotes_data_path, group_id, filename)
                             os.makedirs(os.path.dirname(save_path), exist_ok=True)
                             with open(save_path, 'wb') as f:
                                 f.write(data)
@@ -371,7 +427,7 @@ class Quote_Plugin(Star):
                                 if response.status == 200:
                                     data = await response.read()
                                     filename = f"image_{int(time.time() * 1000)}.jpg"
-                                    file_path = os.path.join("data", "quotes_data", group_id, filename)
+                                    file_path = os.path.join(self.quotes_data_path, group_id, filename)
                                     os.makedirs(os.path.dirname(file_path), exist_ok=True)
                                     with open(file_path, 'wb') as f:
                                         f.write(data)
@@ -409,7 +465,7 @@ class Quote_Plugin(Star):
                 return
             set_mode = self.gain_mode(event)
             if not set_mode:
-                yield event.plain_result(f'⭐请输入"投稿权限+数字"来设置\n  0：关闭投稿系统\n  1：仅管理员可投稿\n  2：全体成员均可投稿\n当前群聊权限设置为：{self.admin_settings.get("mode", 0)}')
+                yield event.plain_result(f'⭐请输入"投稿权限+数字"来设置\n  0：关闭投稿系统\n  1：仅管理员可投稿\n  2：全体成员均可投稿\n当前群聊权限设置为：{self.admin_settings.get("mode", self.default_permission_mode)}')
             else:
                 if set_mode not in ["0", "1", "2"]:
                     yield event.plain_result("⭐模式数字范围出错！请输入正确的模式\n  0：关闭投稿系统\n  1：仅管理员可投稿\n  2：全体成员均可投稿")
@@ -433,10 +489,7 @@ class Quote_Plugin(Star):
             if not set_coldown:
                 yield event.plain_result('⭐请输入"戳戳冷却+数字"来设置，单位为秒\n')
                 return
-            if 'coldown' in self.admin_settings:
-                self.admin_settings['coldown'] = int(set_coldown)
-            else:
-                self.admin_settings['coldown'] = 10
+            self.admin_settings['coldown'] = max(0, int(float(set_coldown)))
             self._save_admin_settings()
             yield event.plain_result(f"⭐戳戳冷却设置成功，当前值为：{self.admin_settings['coldown']}秒")
         
@@ -454,7 +507,7 @@ class Quote_Plugin(Star):
         # --------------------
 
         elif msg.startswith("语录投稿") or msg.startswith("入典"):
-            current_mode = self.admin_settings.get('mode', 0)
+            current_mode = self.admin_settings.get('mode', self.default_permission_mode)
             if current_mode == 0:
                 yield event.plain_result('⭐投稿系统未开启，请联系bot管理员发送"投稿权限"来设置')
                 return
@@ -493,7 +546,7 @@ class Quote_Plugin(Star):
                                 if match:
                                     file_id = match.group(1)
 
-                            if not file_id:
+                            if not file_id and self.allow_text_quote_render:
                                 reply_text = self._extract_reply_text(chain)
                                 if reply_text:
                                     sender = reply_msg.get("sender", {}) if isinstance(reply_msg, dict) else {}
@@ -551,7 +604,8 @@ class Quote_Plugin(Star):
                 yield (event.make_result().message(f"\n错误信息：{str(e)}"))
 
         #region 戳一戳检测
-        if raw_message.get('post_type') == 'notice' and \
+        if self.enable_poke_reply and \
+                raw_message.get('post_type') == 'notice' and \
                 raw_message.get('notice_type') == 'notify' and \
                 raw_message.get('sub_type') == 'poke':
             bot_id = raw_message.get('self_id')
@@ -565,7 +619,7 @@ class Quote_Plugin(Star):
                 if not os.path.exists(self.admin_settings_path):
                     self._create_admin_settings_file()
                 self.admin_settings = self._load_admin_settings()
-                cold_time = self.admin_settings.setdefault('coldown', 10)
+                cold_time = self.admin_settings.setdefault('coldown', self.default_poke_cooldown)
                 last_poke = self.admin_settings.setdefault('last_poke', 0)
                 self._save_admin_settings()
 
@@ -573,7 +627,7 @@ class Quote_Plugin(Star):
                     self.admin_settings['last_poke'] = time.time()
                     self._save_admin_settings()
                     if str(target_id) == str(bot_id):
-                        if random.random() < 0.85:
+                        if random.random() < self.poke_quote_probability:
                             group_folder_path = os.path.join(self.quotes_data_path, group_id)
                             selected_image_path = None
                             if os.path.exists(group_folder_path):
