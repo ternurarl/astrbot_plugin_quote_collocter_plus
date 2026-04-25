@@ -1,0 +1,2 @@
+# astrbot_plugin_quote_collocter_plus
+回复抽象发言自动入典
