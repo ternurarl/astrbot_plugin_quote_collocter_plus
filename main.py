@@ -6,23 +6,101 @@ import yaml
 import aiohttp
 import re
 import unicodedata
-from io import BytesIO
 from astrbot import logger
 from astrbot.core.message.components import Image, Reply, At, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.api.all import *
 
-try:
-    from PIL import Image as PILImage, ImageDraw, ImageFont
-    _PIL_AVAILABLE = True
-except ImportError:
-    _PIL_AVAILABLE = False
-    logger.warning("Pillow 未安装，气泡语录图片功能不可用。请执行 pip install pillow 安装。")
-
-QQBOX_CLOSING_PUNCT = set("，。！？；：、,.!?;:)]】》」』”’")
-QQBOX_OPENING_PUNCT = set("([【《「『“‘")
 QQBOX_DEFAULT_MAX_LINES = 18
 QQBOX_DEFAULT_MAX_CHARS = 600
+
+WHITE_BUBBLE_TMPL = """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #eef2fc;
+      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      color: #222;
+    }
+    .wrap {
+      width: 100%;
+      max-width: 980px;
+      margin: 0 auto;
+    }
+    .msg {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+    }
+    .avatar {
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      object-fit: cover;
+      flex: 0 0 auto;
+      background: #dbe3f3;
+      border: 1px solid #c7d2ea;
+    }
+    .content {
+      max-width: 760px;
+      min-width: 180px;
+    }
+    .name {
+      font-size: 20px;
+      color: #4a5a78;
+      margin-bottom: 8px;
+      line-height: 1.2;
+    }
+    .bubble {
+      position: relative;
+      display: inline-block;
+      background: #fff;
+      border: 1px solid #d4dde8;
+      border-radius: 18px;
+      padding: 14px 18px;
+      font-size: 24px;
+      line-height: 1.5;
+      color: #222833;
+      white-space: pre-wrap;
+      word-break: break-word;
+      box-shadow: 0 2px 8px rgba(120, 138, 170, 0.18);
+    }
+    .bubble::before {
+      content: "";
+      position: absolute;
+      left: -10px;
+      top: 18px;
+      width: 14px;
+      height: 14px;
+      background: #fff;
+      border-left: 1px solid #d4dde8;
+      border-bottom: 1px solid #d4dde8;
+      transform: rotate(45deg);
+      border-bottom-left-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    {% for msg in messages %}
+      <div class="msg">
+        <img class="avatar" src="{{ msg.avatar }}" alt="avatar">
+        <div class="content">
+          <div class="name">{{ msg.name }}</div>
+          <div class="bubble">{{ msg.text }}</div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</body>
+</html>
+"""
 
 @register("quote_collocter_plus", "ternurarl", '发送"语录投稿/入典+图片"或回复图片/文本发送"语录投稿"/"入典"来存储群友的黑历史！发送"/语录"随机查看一条。bot会在被戳一戳时随机发送一张语录', "1.0")
 class Quote_Plugin(Star):
@@ -69,41 +147,25 @@ class Quote_Plugin(Star):
                 return v.strip().lower() in {"1", "true", "yes", "y", "on"}
             return default
 
-        style = str(_get("quote_collector_plus_render_style", default="qqbox")).strip().lower() or "qqbox"
-        image_format = str(_get("quote_collector_plus_render_format", default="jpg")).strip().lower() or "jpg"
-        quality = _as_int(
-            _get("quote_collector_plus_render_quality", default=92),
-            92
-        )
-        quality = max(1, min(100, quality))
-        transparent_bg = _as_bool(
-            _get("quote_collector_plus_render_transparent_bg", default=False),
-            False
-        )
-        max_width = _as_int(
-            _get("quote_collector_plus_render_max_width", default=720),
-            720
-        )
-        max_width = max(320, min(1280, max_width))
+        style = str(_get("quote_collector_plus_render_style", default="white_bubble")).strip().lower() or "white_bubble"
         max_lines = _as_int(_get("quote_collector_plus_render_max_lines", default=QQBOX_DEFAULT_MAX_LINES), QQBOX_DEFAULT_MAX_LINES)
         max_chars = _as_int(_get("quote_collector_plus_render_max_chars", default=QQBOX_DEFAULT_MAX_CHARS), QQBOX_DEFAULT_MAX_CHARS)
         max_lines = max(1, min(50, max_lines))
         max_chars = max(50, min(5000, max_chars))
-        font_paths = _get("quote_collector_plus_render_font_paths", default=[])
-        if isinstance(font_paths, str):
-            font_paths = [p.strip() for p in font_paths.split(",") if p.strip()]
-        if not isinstance(font_paths, list):
-            font_paths = []
+        use_sender_avatar = _as_bool(
+            _get("quote_collector_plus_render_use_sender_avatar", default=True),
+            True
+        )
+        default_avatar = str(
+            _get("quote_collector_plus_render_default_avatar", default="https://api.dicebear.com/7.x/bottts/svg?seed=astrbot")
+        ).strip()
 
         config = {
             "style": style,
-            "format": image_format,
-            "quality": quality,
-            "transparent_bg": transparent_bg,
-            "max_text_width": max_width,
             "max_lines": max_lines,
             "max_chars": max_chars,
-            "font_paths": font_paths,
+            "use_sender_avatar": use_sender_avatar,
+            "default_avatar": default_avatar,
         }
         logger.info(f"quote_collector_plus 渲染配置：{config}")
         return config
@@ -219,47 +281,6 @@ class Quote_Plugin(Star):
         return value
 
     #region 气泡语录生成
-    async def _download_avatar_bytes(self, user_id: str):
-        avatar_url = f"https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status == 200:
-                        return await resp.read()
-                    logger.error(f"下载头像失败 HTTP {resp.status}")
-        except Exception as e:
-            logger.error(f"下载头像异常: {e}")
-        return None
-
-    def _resolve_render_format(self):
-        image_format = (self.render_config.get("format") or "jpg").strip().lower()
-        if image_format in {"jpg", "jpeg"}:
-            return ("JPEG", ".jpg")
-        if image_format == "png":
-            return ("PNG", ".png")
-        return ("JPEG", ".jpg")
-
-    def _resolve_fonts(self):
-        font = None
-        name_font = None
-        custom_candidates = self.render_config.get("font_paths", []) or []
-        if os.name == "nt":
-            default_candidates = ["msyh.ttc", "simhei.ttf", "Arial Unicode MS.ttf", "NotoSansCJK-Regular.ttc", "wqy-zenhei.ttc"]
-        else:
-            default_candidates = ["NotoSansCJK-Regular.ttc", "wqy-zenhei.ttc", "msyh.ttc", "simhei.ttf", "Arial Unicode MS.ttf"]
-        candidates = custom_candidates + default_candidates
-        for font_name in candidates:
-            try:
-                font = ImageFont.truetype(font_name, 28)
-                name_font = ImageFont.truetype(font_name, 24)
-                break
-            except Exception:
-                continue
-        if font is None:
-            font = ImageFont.load_default()
-            name_font = ImageFont.load_default()
-        return font, name_font
-
     def _sanitize_quote_text(self, text: str):
         src = (text or "").strip()
         if not src:
@@ -276,58 +297,10 @@ class Quote_Plugin(Star):
         normalized = re.sub(r"[ \t]+", " ", normalized).strip()
         return normalized or "（无文本内容）"
 
-    def _safe_text_width(self, draw, text: str, font):
-        if not text:
-            return 0
-        try:
-            bbox = draw.textbbox((0, 0), text, font=font)
-            return max(0, bbox[2] - bbox[0])
-        except Exception:
-            return len(text) * 16
-
-    def _safe_text_height(self, draw, text: str, font):
-        probe = text or "M"
-        try:
-            bbox = draw.textbbox((0, 0), probe, font=font)
-            return max(28, bbox[3] - bbox[1])
-        except Exception:
-            return 30
-
-    def _wrap_text(self, text: str, font, max_width: int):
-        draw = ImageDraw.Draw(PILImage.new("RGB", (32, 32)))
-        paragraphs = text.split("\n")
-        all_lines = []
-        for para in paragraphs:
-            if para == "":
-                all_lines.append("")
-                continue
-            current = ""
-            for ch in para:
-                test = current + ch
-                if self._safe_text_width(draw, test, font) <= max_width:
-                    current = test
-                    continue
-                if current:
-                    if len(current) > 1 and current[-1] in QQBOX_OPENING_PUNCT:
-                        moved = current[-1]
-                        all_lines.append(current[:-1])
-                        current = moved + ch
-                    elif ch in QQBOX_CLOSING_PUNCT:
-                        all_lines.append(current + ch)
-                        current = ""
-                    else:
-                        all_lines.append(current)
-                        current = ch
-                else:
-                    all_lines.append(ch)
-                    current = ""
-            if current:
-                all_lines.append(current)
-        return all_lines if all_lines else [""]
-
-    def _apply_long_text_strategy(self, lines):
+    def _apply_long_text_strategy(self, text: str):
         max_lines = int(self.render_config.get("max_lines", QQBOX_DEFAULT_MAX_LINES))
         max_chars = int(self.render_config.get("max_chars", QQBOX_DEFAULT_MAX_CHARS))
+        lines = text.split("\n")
         total = 0
         out = []
         for ln in lines:
@@ -352,80 +325,12 @@ class Quote_Plugin(Star):
                 out[-1] = out[-1][:-1] + "…"
             else:
                 out[-1] = (out[-1] or "") + "…"
-        return out
+        return "\n".join(out)
 
-    def _build_avatar_image(self, avatar_bytes, avatar_size: int):
-        avatar = PILImage.new("RGB", (avatar_size, avatar_size), (220, 228, 241))
-        if avatar_bytes:
-            try:
-                avatar = PILImage.open(BytesIO(avatar_bytes)).convert("RGB").resize((avatar_size, avatar_size))
-            except Exception as e:
-                logger.warning(f"头像解析失败，使用默认头像: {e}")
-        mask = PILImage.new("L", (avatar_size, avatar_size), 0)
-        mdraw = ImageDraw.Draw(mask)
-        mdraw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
-        return avatar, mask
-
-    def _compute_quote_layout(self, lines, font):
-        dummy_draw = ImageDraw.Draw(PILImage.new("RGB", (32, 32)))
-        line_gap = 10
-        bubble_padding_x = 24
-        bubble_padding_y = 18
-        line_heights = []
-        text_w = 0
-        for ln in lines:
-            w = self._safe_text_width(dummy_draw, ln, font)
-            h = self._safe_text_height(dummy_draw, ln, font)
-            text_w = max(text_w, w)
-            line_heights.append(h)
-        text_h = sum(line_heights) + line_gap * max(len(lines) - 1, 0)
-        bubble_w = text_w + bubble_padding_x * 2
-        bubble_h = text_h + bubble_padding_y * 2
-        return {
-            "line_gap": line_gap,
-            "bubble_padding_x": bubble_padding_x,
-            "bubble_padding_y": bubble_padding_y,
-            "line_heights": line_heights,
-            "bubble_w": bubble_w,
-            "bubble_h": bubble_h,
-        }
-
-    def _create_canvas(self, width: int, height: int):
-        transparent_bg = self.render_config.get("transparent_bg", False)
-        if transparent_bg:
-            return PILImage.new("RGBA", (width, height), (0, 0, 0, 0))
-        return PILImage.new("RGB", (width, height), (238, 242, 252))
-
-    def _quality_to_png_compress_level(self, quality: int):
-        safe_quality = max(1, min(100, int(quality)))
-        # 将质量(1-100, 越高越好)映射到 PNG compress_level(0-9, 越高压缩越强)。
-        # 因为两者方向相反，使用 (100-quality) 线性缩放到 0-9。
-        # 这里除以 99 而不是 100，是为了让 quality=1/100 精确落在 9/0 两端。
-        return round((100 - safe_quality) * 9 / 99)
-
-    def _draw_qqbox_bubble(self, draw, bubble_box):
-        bubble_x, bubble_y, bubble_r, bubble_b = bubble_box
-        radius = 22
-        shadow_offset = 4
-        draw.rounded_rectangle(
-            (bubble_x + shadow_offset, bubble_y + shadow_offset, bubble_r + shadow_offset, bubble_b + shadow_offset),
-            radius=radius,
-            fill=(213, 221, 239, 120)
-        )
-        draw.rounded_rectangle(
-            (bubble_x, bubble_y, bubble_r, bubble_b),
-            radius=radius,
-            fill=(255, 255, 255),
-            outline=(212, 221, 238),
-            width=2
-        )
-        tail = [
-            (bubble_x - 14, bubble_y + 27),
-            (bubble_x + 2, bubble_y + 20),
-            (bubble_x + 2, bubble_y + 39),
-            (bubble_x - 4, bubble_y + 37),
-        ]
-        draw.polygon(tail, fill=(255, 255, 255), outline=(212, 221, 238))
+    def _resolve_avatar_url(self, speaker_id: str):
+        if self.render_config.get("use_sender_avatar", True) and speaker_id:
+            return f"https://q1.qlogo.cn/g?b=qq&nk={speaker_id}&s=640"
+        return self.render_config.get("default_avatar") or "https://api.dicebear.com/7.x/bottts/svg?seed=astrbot"
 
     async def _render_bubble_quote_image(
         self,
@@ -434,94 +339,26 @@ class Quote_Plugin(Star):
         speaker_name: str,
         text: str
     ):
-        if not _PIL_AVAILABLE:
-            logger.error("Pillow 未安装，无法生成气泡语录图片")
-            return None
         try:
-            style = (self.render_config.get("style") or "qqbox").strip().lower()
+            style = (self.render_config.get("style") or "white_bubble").strip().lower()
             if style in {"off", "none", "disable", "disabled"}:
                 logger.info("文本转图渲染已关闭")
                 return None
-            if style != "qqbox":
-                logger.warning(f"未知渲染风格 {style}，自动回退为 qqbox")
+            if style != "white_bubble":
+                logger.warning(f"未知渲染风格 {style}，自动回退为 white_bubble")
 
-            avatar_bytes = await self._download_avatar_bytes(str(speaker_id))
-            font, name_font = self._resolve_fonts()
             normalized_text = self._sanitize_quote_text(text)
-            max_text_width = self.render_config.get("max_text_width", 720)
-            lines = self._apply_long_text_strategy(self._wrap_text(normalized_text, font, max_text_width))
-
-            padding = 28
-            avatar_size = 96
-            layout = self._compute_quote_layout(lines, font)
-            bubble_w = layout["bubble_w"]
-            bubble_h = layout["bubble_h"]
-
-            width = padding + avatar_size + 18 + bubble_w + padding
-            height = max(padding * 2 + avatar_size, padding * 2 + 30 + bubble_h)
-
-            canvas = self._create_canvas(width, height)
-            draw = ImageDraw.Draw(canvas)
-
-            # 头像
-            avatar, mask = self._build_avatar_image(avatar_bytes, avatar_size)
-            avatar_x = padding
-            avatar_y = padding
-            canvas.paste(avatar, (avatar_x, avatar_y), mask)
-            draw.ellipse(
-                (avatar_x - 1, avatar_y - 1, avatar_x + avatar_size + 1, avatar_y + avatar_size + 1),
-                outline=(196, 206, 225),
-                width=2
-            )
-
-            # 昵称
-            name = (speaker_name or str(speaker_id))[:30]
-            name_x = avatar_x + avatar_size + 18
-            name_y = padding
-            draw.text((name_x, name_y), name, fill=(72, 88, 116), font=name_font)
-
-            # 气泡
-            bubble_x = name_x
-            bubble_y = name_y + 34
-            self._draw_qqbox_bubble(draw, (bubble_x, bubble_y, bubble_x + bubble_w, bubble_y + bubble_h))
-
-            # 文本
-            tx = bubble_x + layout["bubble_padding_x"]
-            ty = bubble_y + layout["bubble_padding_y"]
-            for i, ln in enumerate(lines):
-                safe_ln = ln or " "
-                try:
-                    draw.text((tx, ty), safe_ln, fill=(34, 40, 52), font=font)
-                except Exception:
-                    logger.warning(f"文本绘制失败，已回退替换字符: {safe_ln[:30]}")
-                    fallback_ln = "".join(ch if ch.isprintable() else "�" for ch in safe_ln)
-                    draw.text((tx, ty), fallback_ln, fill=(34, 40, 52), font=font)
-                ty += layout["line_heights"][i] + layout["line_gap"]
-
-            # 保存
-            group_folder = self._group_folder_path(group_id)
-            self._ensure_dir(group_folder, "群语录目录")
-            export_format, export_ext = self._resolve_render_format()
-            out_path = self._new_quote_image_path(group_id, prefix="quote_bubble", ext=export_ext)
-            if export_format == "PNG":
-                if canvas.mode not in ("RGB", "RGBA"):
-                    canvas = canvas.convert("RGBA" if self.render_config.get("transparent_bg", False) else "RGB")
-                canvas.save(
-                    out_path,
-                    format="PNG",
-                    compress_level=self._quality_to_png_compress_level(self.render_config.get("quality", 92)),
-                    optimize=True
-                )
-            else:
-                if canvas.mode != "RGB":
-                    bg = PILImage.new("RGB", canvas.size, (238, 242, 252))
-                    if canvas.mode == "RGBA":
-                        bg.paste(canvas, mask=canvas.getchannel("A"))
-                    else:
-                        bg.paste(canvas.convert("RGB"))
-                    canvas = bg
-                canvas.save(out_path, format="JPEG", quality=self.render_config.get("quality", 92), optimize=True)
-            return out_path
+            final_text = self._apply_long_text_strategy(normalized_text)
+            render_data = {
+                "messages": [
+                    {
+                        "name": (speaker_name or str(speaker_id) or "群友")[:30],
+                        "avatar": self._resolve_avatar_url(str(speaker_id)),
+                        "text": final_text,
+                    }
+                ]
+            }
+            return await self.html_render(WHITE_BUBBLE_TMPL, render_data)
         except Exception as e:
             logger.error(f"生成气泡图失败: {e}")
             return None
@@ -752,15 +589,17 @@ class Quote_Plugin(Star):
                         text=reply_text
                     )
                     msg_id = str(event.message_obj.message_id)
-                    if bubble_path and os.path.exists(bubble_path):
+                    bubble_ok = bool(bubble_path) and (
+                        str(bubble_path).startswith(("http://", "https://", "file://", "data:"))
+                        or os.path.exists(str(bubble_path))
+                    )
+                    if bubble_ok:
                         yield event.chain_result([Reply(id=msg_id), Plain(text="⭐入典成功（已生成气泡语录图）！")])
                     else:
-                        if not _PIL_AVAILABLE:
-                            yield event.plain_result("⭐投稿失败：当前环境未安装 Pillow，无法进行“引用文本转图”，请先安装 pillow。")
-                        elif (self.render_config.get("style") or "").strip().lower() in {"off", "none", "disable", "disabled"}:
+                        if (self.render_config.get("style") or "").strip().lower() in {"off", "none", "disable", "disabled"}:
                             yield event.plain_result("⭐投稿失败：当前已关闭“引用文本转图”渲染，可在配置中开启渲染风格。")
                         else:
-                            yield event.plain_result("⭐投稿失败：生成气泡语录图失败")
+                            yield event.plain_result("⭐投稿失败：生成气泡语录图失败（请检查 html_render 环境配置）")
                 except Exception as e:
                     logger.error(f"生成气泡语录图过程出错: {e}")
                     yield event.plain_result(f"⭐投稿失败: {str(e)}")
