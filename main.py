@@ -129,7 +129,7 @@ class Quote_Plugin(Star):
         if not image_url:
             return None
 
-        filename = f"image_{int(time.time() * 1000)}_{uuid.uuid4().hex}.jpg"
+        filename = f"image_{uuid.uuid4().hex}.jpg"
         save_path = os.path.join("data", "quotes_data", group_id, filename)
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
@@ -156,6 +156,7 @@ class Quote_Plugin(Star):
                                 f.write(data)
                             return save_path
                         logger.error(f"下载渲染图片失败: HTTP {response.status}, image_url={image_url}, save_path={save_path}")
+                        return None
 
         except Exception as e:
             logger.error(f"保存渲染图片失败: {e}, image_url={image_url}, save_path={save_path}")
@@ -363,7 +364,9 @@ class Quote_Plugin(Star):
                                 if reply_text:
                                     sender = reply_msg.get("sender", {}) if isinstance(reply_msg, dict) else {}
                                     sender_id = sender.get("user_id")
-                                    sender_name = sender.get("card") or sender.get("nickname") or (str(sender_id) if sender_id is not None else "未知用户")
+                                    sender_card = sender.get("card")
+                                    sender_nickname = sender.get("nickname")
+                                    sender_name = sender_card or sender_nickname or (str(sender_id) if sender_id is not None else "未知用户")
                                     sender_avatar = f"https://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=640" if sender_id else event.get_sender_avatar()
                                     rendered_path = await self._render_bubble_image(
                                         group_id=group_id,
@@ -387,7 +390,12 @@ class Quote_Plugin(Star):
                 self.create_group_folder(group_id)
                 # 下载并保存图片
                 try:
-                    file_path = rendered_path or await self.download_image(event, file_id, group_id)
+                    if rendered_path:
+                        file_path = rendered_path
+                    elif file_id:
+                        file_path = await self.download_image(event, file_id, group_id)
+                    else:
+                        file_path = None
                     msg_id = str(event.message_obj.message_id)
                     
                     if file_path and os.path.exists(file_path):
