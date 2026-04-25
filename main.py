@@ -8,7 +8,7 @@ import re
 import uuid
 import html
 import unicodedata
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageChops
 from urllib.parse import urlparse
 from astrbot import logger
 from astrbot.core.message.components import Image, Reply, At, Plain
@@ -35,7 +35,7 @@ class Quote_Plugin(Star):
   <img src="{{ avatar }}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;" />
   <div style="display:flex;flex-direction:column;align-items:flex-start;max-width:{{ text_container_max_width }}px;">
     <div style="font-size:14px;color:#8c8c8c;line-height:1.4;margin-bottom:6px;">{{ name }}</div>
-    <div style="background:#ffffff;border-radius:0 16px 16px 16px;padding:{{ bubble_padding }};color:#111111;font-size:{{ font_size }}px;line-height:{{ line_height }};white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;box-shadow:0 1px 2px rgba(0,0,0,0.06);width:fit-content;min-width:{{ min_width }}px;max-width:{{ max_width }}px;box-sizing:border-box;">
+    <div style="background:#fcfcfc;border-radius:0 16px 16px 16px;padding:{{ bubble_padding }};color:#111111;font-size:{{ font_size }}px;line-height:{{ line_height }};white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;box-shadow:0 1px 2px rgba(0,0,0,0.06);width:fit-content;min-width:{{ min_width }}px;max-width:{{ max_width }}px;box-sizing:border-box;">
       {{ text }}
     </div>
   </div>
@@ -234,23 +234,33 @@ class Quote_Plugin(Star):
             # 2. 图片获取成功后，执行精准裁剪
             if is_saved:
                 with PILImage.open(save_path) as img:
-                    rgba = img.convert("RGBA")
-                    # 优先根据透明通道裁剪，避免把整页背景当成内容
-                    bbox = rgba.getchannel("A").getbbox()
+                    # 统一转换为 RGB，抛弃可能失效的透明通道
+                    rgb = img.convert("RGB")
+                    
+                    # 取图片【最右下角】的像素作为基准色（这里绝对是大面积的空白背景）
+                    bg_color = rgb.getpixel((rgb.width - 1, rgb.height - 1))
+                    bg_img = PILImage.new("RGB", rgb.size, bg_color)
+                    
+                    # 差异计算：相同的地方会变黑 (0,0,0)，此时 #fcfcfc 的气泡会被保留
+                    diff = ImageChops.difference(rgb, bg_img)
+                    diff_gray = diff.convert("L")
+                    
+                    # 获取非黑区域的边界
+                    bbox = diff_gray.getbbox()
+
                     if bbox:
-                        pad = 12 # 设置你需要的边缘留白像素
+                        pad = 16 # 气泡外围的留白像素
                         crop_box = (
                             max(0, bbox[0] - pad), 
                             max(0, bbox[1] - pad),
-                            min(rgba.width, bbox[2] + pad), 
-                            min(rgba.height, bbox[3] + pad)
+                            min(rgb.width, bbox[2] + pad), 
+                            min(rgb.height, bbox[3] + pad)
                         )
-                        cropped = rgba.crop(crop_box)
-                        
-                        # 转换回纯白底色的 JPEG 以压缩存储体积
-                        bg = PILImage.new("RGB", cropped.size, (255, 255, 255))
-                        bg.paste(cropped, mask=cropped.getchannel("A"))
-                        bg.save(save_path, "JPEG", quality=85)
+                        cropped = rgb.crop(crop_box)
+                        cropped.save(save_path, "JPEG", quality=85)
+                    else:
+                        # 兜底：如果找不到边界，直接转存
+                        rgb.save(save_path, "JPEG", quality=85)
                 
                 return save_path
 
