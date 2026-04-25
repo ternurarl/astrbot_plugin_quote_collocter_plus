@@ -5,6 +5,7 @@ import json
 import yaml
 import aiohttp
 import re
+import uuid
 from urllib.parse import urlparse
 from astrbot import logger
 from astrbot.core.message.components import Image, Reply, At, Plain
@@ -128,7 +129,7 @@ class Quote_Plugin(Star):
         if not image_url:
             return None
 
-        filename = f"image_{int(time.time() * 1000)}.jpg"
+        filename = f"image_{int(time.time() * 1000)}_{uuid.uuid4().hex}.jpg"
         save_path = os.path.join("data", "quotes_data", group_id, filename)
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
@@ -154,10 +155,10 @@ class Quote_Plugin(Star):
                             with open(save_path, "wb") as f:
                                 f.write(data)
                             return save_path
-                        logger.error(f"下载渲染图片失败: HTTP {response.status}")
+                        logger.error(f"下载渲染图片失败: HTTP {response.status}, image_url={image_url}, save_path={save_path}")
 
         except Exception as e:
-            logger.error(f"保存渲染图片失败: {e}")
+            logger.error(f"保存渲染图片失败: {e}, image_url={image_url}, save_path={save_path}")
         return None
 
     #region 下载语录图片
@@ -362,7 +363,7 @@ class Quote_Plugin(Star):
                                 if reply_text:
                                     sender = reply_msg.get("sender", {}) if isinstance(reply_msg, dict) else {}
                                     sender_id = sender.get("user_id")
-                                    sender_name = sender.get("card") or sender.get("nickname") or str(sender_id or "未知用户")
+                                    sender_name = sender.get("card") or sender.get("nickname") or (str(sender_id) if sender_id is not None else "未知用户")
                                     sender_avatar = f"https://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=640" if sender_id else event.get_sender_avatar()
                                     rendered_path = await self._render_bubble_image(
                                         group_id=group_id,
