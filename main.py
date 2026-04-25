@@ -8,6 +8,7 @@ import re
 import uuid
 import html
 import unicodedata
+from PIL import Image as PILImage
 from urllib.parse import urlparse
 from astrbot import logger
 from astrbot.core.message.components import Image, Reply, At, Plain
@@ -196,8 +197,8 @@ class Quote_Plugin(Star):
         }
         render_options = {
             "full_page": True,
-            "type": "jpeg",
-            "quality": 60,
+            "type": "png",             # 【修改】必须改为 png 以支持透明度
+            "omit_background": True,   # 【新增】开启透明背景，方便识别内容边界
             "animations": "disabled",
             "caret": "hide"
         }
@@ -210,32 +211,52 @@ class Quote_Plugin(Star):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
         try:
+            is_saved = False
+            # 1. 统一处理本地或远程的图片获取
             if os.path.exists(image_url):
                 with open(image_url, "rb") as src, open(save_path, "wb") as dst:
                     dst.write(src.read())
+                is_saved = True
+            else:
+                parsed = urlparse(image_url)
+                if parsed.scheme == "file" and os.path.exists(parsed.path):
+                    with open(parsed.path, "rb") as src, open(save_path, "wb") as dst:
+                        dst.write(src.read())
+                    is_saved = True
+                elif image_url.startswith("http://") or image_url.startswith("https://"):
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(image_url) as response:
+                            if response.status == 200:
+                                with open(save_path, "wb") as f:
+                                    f.write(await response.read())
+                                is_saved = True
+
+            # 2. 图片获取成功后，执行精准裁剪
+            if is_saved:
+                with PILImage.open(save_path) as img:
+                    bbox = img.getbbox() # 获取非透明区域（即你的气泡）的精准边界框
+                    if bbox:
+                        pad = 12 # 设置你需要的边缘留白像素
+                        crop_box = (
+                            max(0, bbox[0] - pad), 
+                            max(0, bbox[1] - pad),
+                            min(img.width, bbox[2] + pad), 
+                            min(img.height, bbox[3] + pad)
+                        )
+                        cropped = img.crop(crop_box)
+                        
+                        # 转换回纯白底色的 JPEG 以压缩存储体积
+                        bg = Image.new("RGB", cropped.size, (255, 255, 255))
+                        if cropped.mode in ('RGBA', 'LA'):
+                            bg.paste(cropped, mask=cropped.split()[-1])
+                        else:
+                            bg.paste(cropped)
+                        bg.save(save_path, "JPEG", quality=85)
+                
                 return save_path
 
-            parsed = urlparse(image_url)
-            if parsed.scheme == "file":
-                local_path = parsed.path
-                if os.path.exists(local_path):
-                    with open(local_path, "rb") as src, open(save_path, "wb") as dst:
-                        dst.write(src.read())
-                    return save_path
-
-            if image_url.startswith("http://") or image_url.startswith("https://"):
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(image_url) as response:
-                        if response.status == 200:
-                            data = await response.read()
-                            with open(save_path, "wb") as f:
-                                f.write(data)
-                            return save_path
-                        logger.error(f"下载渲染图片失败: HTTP {response.status}, image_url={image_url}, save_path={save_path}")
-                        return None
-
         except Exception as e:
-            logger.error(f"保存渲染图片失败: {e}, image_url={image_url}, save_path={save_path}")
+            logger.error(f"保存或裁剪渲染图片失败: {e}, image_url={image_url}")
         return None
 
     #region 下载语录图片
