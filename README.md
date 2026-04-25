@@ -17,3 +17,13 @@
 
 ## 注意事项
 图片投稿没有限制，请自己注意审核
+
+## 投稿到 AstrBot 官方插件市场
+如果你要把本插件提交到 AstrBot 官方插件市场，请按官方流程操作：
+
+1. 先将你的插件代码发布到你自己的 GitHub 插件仓库。  
+2. 打开官方插件市场：<https://plugins.astrbot.app>  
+3. 点击右下角 `+`，填写插件信息（基础信息、作者信息、仓库信息等）。  
+4. 点击 `Submit to GITHUB`，跳转到 AstrBot 主仓库的 Issue 提交页后，确认无误并点击 `Create` 完成投稿。  
+
+> 说明：`AstrBotDevs/AstrBot_Plugins_Collection` 已不再接受 PR，请使用上述官方提交通道。
