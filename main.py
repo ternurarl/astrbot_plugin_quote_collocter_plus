@@ -13,8 +13,12 @@ from astrbot.api.all import *
 
 QQBOX_DEFAULT_MAX_LINES = 18
 QQBOX_DEFAULT_MAX_CHARS = 600
+DEFAULT_BUBBLE_STYLE = "white_bubble"
+DEFAULT_AVATAR_URL = "https://api.dicebear.com/7.x/bottts/svg?seed=astrbot"
+MAX_SPEAKER_NAME_LENGTH = 30
+RENDER_OUTPUT_SCHEMES = ("http://", "https://", "file://", "data:")
 
-WHITE_BUBBLE_TMPL = """
+WHITE_BUBBLE_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -147,7 +151,7 @@ class Quote_Plugin(Star):
                 return v.strip().lower() in {"1", "true", "yes", "y", "on"}
             return default
 
-        style = str(_get("quote_collector_plus_render_style", default="white_bubble")).strip().lower() or "white_bubble"
+        style = str(_get("quote_collector_plus_render_style", default=DEFAULT_BUBBLE_STYLE)).strip().lower() or DEFAULT_BUBBLE_STYLE
         max_lines = _as_int(_get("quote_collector_plus_render_max_lines", default=QQBOX_DEFAULT_MAX_LINES), QQBOX_DEFAULT_MAX_LINES)
         max_chars = _as_int(_get("quote_collector_plus_render_max_chars", default=QQBOX_DEFAULT_MAX_CHARS), QQBOX_DEFAULT_MAX_CHARS)
         max_lines = max(1, min(50, max_lines))
@@ -157,8 +161,10 @@ class Quote_Plugin(Star):
             True
         )
         default_avatar = str(
-            _get("quote_collector_plus_render_default_avatar", default="https://api.dicebear.com/7.x/bottts/svg?seed=astrbot")
+            _get("quote_collector_plus_render_default_avatar", default=DEFAULT_AVATAR_URL)
         ).strip()
+        if not default_avatar:
+            default_avatar = DEFAULT_AVATAR_URL
 
         config = {
             "style": style,
@@ -297,7 +303,7 @@ class Quote_Plugin(Star):
         normalized = re.sub(r"[ \t]+", " ", normalized).strip()
         return normalized or "（无文本内容）"
 
-    def _apply_long_text_strategy(self, text: str):
+    def _apply_text_limits(self, text: str):
         max_lines = int(self.render_config.get("max_lines", QQBOX_DEFAULT_MAX_LINES))
         max_chars = int(self.render_config.get("max_chars", QQBOX_DEFAULT_MAX_CHARS))
         lines = text.split("\n")
@@ -328,9 +334,19 @@ class Quote_Plugin(Star):
         return "\n".join(out)
 
     def _resolve_avatar_url(self, speaker_id: str):
-        if self.render_config.get("use_sender_avatar", True) and speaker_id:
-            return f"https://q1.qlogo.cn/g?b=qq&nk={speaker_id}&s=640"
-        return self.render_config.get("default_avatar") or "https://api.dicebear.com/7.x/bottts/svg?seed=astrbot"
+        sid = (speaker_id or "").strip()
+        if self.render_config.get("use_sender_avatar", True) and sid:
+            return f"https://q1.qlogo.cn/g?b=qq&nk={sid}&s=640"
+        return self.render_config.get("default_avatar") or DEFAULT_AVATAR_URL
+
+    def _resolve_speaker_name(self, speaker_id: str, speaker_name: str):
+        name = (speaker_name or "").strip()
+        if name:
+            return name[:MAX_SPEAKER_NAME_LENGTH]
+        sid = (str(speaker_id) if speaker_id is not None else "").strip()
+        if sid:
+            return sid[:MAX_SPEAKER_NAME_LENGTH]
+        return "群友"
 
     async def _render_bubble_quote_image(
         self,
@@ -340,25 +356,25 @@ class Quote_Plugin(Star):
         text: str
     ):
         try:
-            style = (self.render_config.get("style") or "white_bubble").strip().lower()
+            style = (self.render_config.get("style") or DEFAULT_BUBBLE_STYLE).strip().lower()
             if style in {"off", "none", "disable", "disabled"}:
                 logger.info("文本转图渲染已关闭")
                 return None
-            if style != "white_bubble":
-                logger.warning(f"未知渲染风格 {style}，自动回退为 white_bubble")
+            if style != DEFAULT_BUBBLE_STYLE:
+                logger.warning(f"未知渲染风格 {style}，自动回退为 {DEFAULT_BUBBLE_STYLE}")
 
             normalized_text = self._sanitize_quote_text(text)
-            final_text = self._apply_long_text_strategy(normalized_text)
+            final_text = self._apply_text_limits(normalized_text)
             render_data = {
                 "messages": [
                     {
-                        "name": (speaker_name or str(speaker_id) or "群友")[:30],
-                        "avatar": self._resolve_avatar_url(str(speaker_id)),
+                        "name": self._resolve_speaker_name(speaker_id, speaker_name),
+                        "avatar": self._resolve_avatar_url("" if speaker_id is None else str(speaker_id)),
                         "text": final_text,
                     }
                 ]
             }
-            return await self.html_render(WHITE_BUBBLE_TMPL, render_data)
+            return await self.html_render(WHITE_BUBBLE_TEMPLATE, render_data)
         except Exception as e:
             logger.error(f"生成气泡图失败: {e}")
             return None
@@ -590,7 +606,7 @@ class Quote_Plugin(Star):
                     )
                     msg_id = str(event.message_obj.message_id)
                     bubble_ok = bool(bubble_path) and (
-                        str(bubble_path).startswith(("http://", "https://", "file://", "data:"))
+                        str(bubble_path).startswith(RENDER_OUTPUT_SCHEMES)
                         or os.path.exists(str(bubble_path))
                     )
                     if bubble_ok:
@@ -599,7 +615,7 @@ class Quote_Plugin(Star):
                         if (self.render_config.get("style") or "").strip().lower() in {"off", "none", "disable", "disabled"}:
                             yield event.plain_result("⭐投稿失败：当前已关闭“引用文本转图”渲染，可在配置中开启渲染风格。")
                         else:
-                            yield event.plain_result("⭐投稿失败：生成气泡语录图失败（请检查 html_render 环境配置）")
+                            yield event.plain_result("⭐投稿失败：生成气泡语录图失败（请检查 html_render 是否可用、模板渲染配置是否完整）")
                 except Exception as e:
                     logger.error(f"生成气泡语录图过程出错: {e}")
                     yield event.plain_result(f"⭐投稿失败: {str(e)}")
