@@ -3,3 +3,4 @@ __pycache__/
 .npm-cache/
 output-playground-*.png
 output-t2i-*.jpg
+output-t2i-*.png

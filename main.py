@@ -29,10 +29,11 @@ class Quote_Plugin(Star):
     BUBBLE_LINE_BONUS_PX = 16
     BUBBLE_MAX_LINE_BONUS_PX = 120
     BUBBLE_CONTAINER_EXTRA_WIDTH = 90
+    BUBBLE_RENDER_SCALE = 1.5
 
     TMPL = '''
 <style>html { margin: 0; padding: 0; background: transparent; width: fit-content; height: fit-content; } body { margin: 0; padding: 0; display: inline-block; background: transparent; width: fit-content; height: fit-content; overflow: hidden; }</style>
-<div id="quote-card" style="display:inline-flex;align-items:flex-start;gap:10px;padding:12px;background:transparent;width:fit-content;max-width:{{ container_max_width }}px;box-sizing:border-box;">
+<div id="quote-card" style="display:inline-flex;align-items:flex-start;gap:10px;padding:12px;background:transparent;width:fit-content;max-width:{{ container_max_width }}px;box-sizing:border-box;zoom:{{ render_scale }};">
   <img src="{{ avatar }}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;" />
   <div style="display:flex;flex-direction:column;align-items:flex-start;max-width:{{ text_container_max_width }}px;">
     <div style="font-size:14px;color:#8c8c8c;line-height:1.4;margin-bottom:6px;">{{- name -}}</div>
@@ -176,6 +177,41 @@ class Quote_Plugin(Star):
         min_width = min(self.BUBBLE_MIN_WIDTH, max_width)
         return min_width, max_width
 
+    def _find_render_bbox(self, rgba: PILImage.Image) -> tuple[tuple[int, int, int, int] | None, int]:
+        alpha_bbox = rgba.getchannel("A").getbbox()
+        full_bbox = (0, 0, rgba.width, rgba.height)
+        if alpha_bbox and alpha_bbox != full_bbox:
+            return alpha_bbox, 8
+
+        rgb = rgba.convert("RGB")
+        background_colors = {
+            rgb.getpixel((0, 0)),
+            rgb.getpixel((rgba.width - 1, 0)),
+            rgb.getpixel((0, rgba.height - 1)),
+            rgb.getpixel((rgba.width - 1, rgba.height - 1)),
+        }
+
+        def is_background(pixel):
+            return any(
+                abs(pixel[0] - bg[0]) + abs(pixel[1] - bg[1]) + abs(pixel[2] - bg[2]) <= 48
+                for bg in background_colors
+            )
+
+        min_x, min_y = rgba.width, rgba.height
+        max_x, max_y = -1, -1
+        pixels = rgb.load()
+        for y in range(rgba.height):
+            for x in range(rgba.width):
+                if not is_background(pixels[x, y]):
+                    min_x = min(min_x, x)
+                    min_y = min(min_y, y)
+                    max_x = max(max_x, x)
+                    max_y = max(max_y, y)
+
+        if max_x >= min_x and max_y >= min_y:
+            return (min_x, min_y, max_x + 1, max_y + 1), 24
+        return alpha_bbox, 8
+
     async def _render_bubble_image(self, group_id, avatar, name, text):
         safe_name = html.escape(self._prepare_render_text(name, fallback="未知用户"))
         normalized_text = self._prepare_render_text(text, fallback="（空白内容）")
@@ -192,20 +228,21 @@ class Quote_Plugin(Star):
             "text_container_max_width": max_width,
             "bubble_padding": "10px 14px",
             "font_size": self.BUBBLE_FONT_SIZE,
-            "line_height": self.BUBBLE_LINE_HEIGHT
+            "line_height": self.BUBBLE_LINE_HEIGHT,
+            "render_scale": self.BUBBLE_RENDER_SCALE,
         }
         render_options = {
             "full_page": True,
-            "type": "png",             # 【修改】必须改为 png 以支持透明度
-            "omit_background": True,   # 【新增】开启透明背景，方便识别内容边界
+            "type": "png",
+            "omit_background": True,
             "animations": "disabled",
             "caret": "hide"
         }
-        image_url = await self.html_render(self.TMPL, render_data, options=render_options)
+        image_url = await self.html_render(self.TMPL, render_data, return_url=False, options=render_options)
         if not image_url:
             return None
 
-        filename = f"image_{uuid.uuid4().hex}.jpg"
+        filename = f"image_{uuid.uuid4().hex}.png"
         save_path = os.path.join("data", "quotes_data", group_id, filename)
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
@@ -234,11 +271,9 @@ class Quote_Plugin(Star):
             if is_saved:
                 with PILImage.open(save_path) as img:
                     rgba = img.convert("RGBA")
-                    # 由于加了 CSS 且启用了 omit_background，周围一定是纯透明的
-                    bbox = rgba.getchannel("A").getbbox()
+                    bbox, pad = self._find_render_bbox(rgba)
 
                     if bbox:
-                        pad = 8 # 稍微留一点边缘过渡即可
                         crop_box = (
                             max(0, bbox[0] - pad), 
                             max(0, bbox[1] - pad),
@@ -246,14 +281,14 @@ class Quote_Plugin(Star):
                             min(rgba.height, bbox[3] + pad)
                         )
                         cropped = rgba.crop(crop_box)
-                        
-                        # 转换回纯白底色的 JPEG 以压缩存储体积
+
+                        # 使用 PNG 保存，避免 JPEG 压缩让小字号文字和头像发糊
                         bg = PILImage.new("RGB", cropped.size, (255, 255, 255))
                         bg.paste(cropped, mask=cropped.getchannel("A"))
-                        bg.save(save_path, "JPEG", quality=85)
+                        bg.save(save_path, "PNG", optimize=True)
                     else:
                         # 兜底转换
-                        rgba.convert("RGB").save(save_path, "JPEG", quality=85)
+                        rgba.convert("RGB").save(save_path, "PNG", optimize=True)
                 
                 return save_path
 
