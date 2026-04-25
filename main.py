@@ -10,7 +10,7 @@ from astrbot.core.message.components import Image, Reply, At, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.api.all import *
 
-@register("quote_collocter_plus", "ternurarl", "发送"语录投稿+图片"或回复图片发送"语录投稿"来存储群友的黑历史！发送"/语录"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.0")
+@register("quote_collocter_plus", "ternurarl", "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.0")
 class Quote_Plugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -246,7 +246,7 @@ class Quote_Plugin(Star):
                 yield event.plain_result("⭐本群还没有群友语录哦~\n请发送"语录投稿+图片"进行添加！")
         # --------------------
 
-        elif msg.startswith("语录投稿"):
+        elif msg.startswith("语录投稿") or msg.startswith("入典"):
             current_mode = self.admin_settings.get('mode', 0)
             if current_mode == 0:
                 yield event.plain_result("⭐投稿系统未开启，请联系bot管理员发送"投稿权限"来设置")
@@ -291,7 +291,7 @@ class Quote_Plugin(Star):
             if not file_id:
                 chain = [
                     At(qq=user_id),
-                    Plain(text="\n你是不是忘发图啦？\n请直接"语录投稿+图片"或者"引用图片并发送语录投稿"")
+                    Plain(text="\n你是不是忘发图啦？\n请直接发送\"语录投稿+图片\"或\"入典+图片\"\n或者引用图片并发送\"语录投稿\"/\"入典\"")
                 ]
                 yield event.chain_result(chain)
                 return
