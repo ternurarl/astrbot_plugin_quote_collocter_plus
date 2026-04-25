@@ -57,5 +57,41 @@
     "type": "int",
     "hint": "引用文本转图片时的最大字符数，超出会截断。",
     "default": 3000
+  },
+  "enable_album_upload": {
+    "description": "投稿后自动上传群相册",
+    "type": "bool",
+    "hint": "开启后，语录图片本地保存成功时，会额外上传到 NapCat 群相册。仅支持 aiocqhttp/NapCat 等提供群相册扩展接口的协议端。",
+    "default": false
+  },
+  "album_name": {
+    "description": "目标群相册名称",
+    "type": "string",
+    "hint": "可填写群相册名称，插件会尝试通过 get_qun_album_list 查找对应 album_id。也可在群内用“语录相册 名称 相册名”覆盖。",
+    "default": ""
+  },
+  "album_id": {
+    "description": "目标群相册ID",
+    "type": "string",
+    "hint": "可直接填写 album_id；与相册名称同时填写时优先使用该 ID。也可在群内用“语录相册 ID 相册ID”覆盖。",
+    "default": ""
+  },
+  "album_upload_strict": {
+    "description": "相册名称严格匹配",
+    "type": "bool",
+    "hint": "开启后，配置了相册名称但找不到对应 album_id 时会停止相册上传。无论是否开启，本地语录保存都不受影响。",
+    "default": false
+  },
+  "album_upload_use_base64_fallback": {
+    "description": "相册上传启用 Base64 兜底",
+    "type": "bool",
+    "hint": "本地路径上传失败时，将图片转为 base64:// 再重试，适合 AstrBot 与 NapCat 不在同一文件环境的情况。",
+    "default": true
+  },
+  "album_upload_show_result": {
+    "description": "投稿回复显示相册上传结果",
+    "type": "bool",
+    "hint": "开启后，投稿成功回复会附带群相册上传成功或失败信息。",
+    "default": true
   }
 }

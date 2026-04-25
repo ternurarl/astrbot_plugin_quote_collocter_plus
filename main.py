@@ -2,6 +2,7 @@ import os
 import random
 import time
 import json
+import base64
 import yaml
 import aiohttp
 import re
@@ -16,7 +17,7 @@ from astrbot.core.message.components import Image, Reply, At, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.api.all import *
 
-@register("quote_collocter_plus", "ternurarl", "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.3")
+@register("quote_collocter_plus", "ternurarl", "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.4")
 class Quote_Plugin(Star):
     BUBBLE_MIN_WIDTH = 140
     BUBBLE_MAX_WIDTH = 640
@@ -53,6 +54,12 @@ class Quote_Plugin(Star):
         self.enable_poke_reply = self._get_config_bool("enable_poke_reply", True)
         self.allow_text_quote_render = self._get_config_bool("allow_text_quote_render", True)
         self.BUBBLE_TEXT_MAX_LENGTH = self._get_config_int("text_quote_max_length", self.BUBBLE_TEXT_MAX_LENGTH, min_value=1)
+        self.enable_album_upload = self._get_config_bool("enable_album_upload", False)
+        self.album_name = self._get_config_str("album_name", "")
+        self.album_id = self._get_config_str("album_id", "")
+        self.album_upload_strict = self._get_config_bool("album_upload_strict", False)
+        self.album_upload_use_base64_fallback = self._get_config_bool("album_upload_use_base64_fallback", True)
+        self.album_upload_show_result = self._get_config_bool("album_upload_show_result", True)
 
         plugin_admins = self._normalize_admin_ids(self.config.get("admin_ids", []))
         global_admins = []
@@ -75,10 +82,21 @@ class Quote_Plugin(Star):
 
     def _get_config_bool(self, key, default):
         value = self.config.get(key, default)
+        return self._coerce_bool(value, default)
+
+    def _coerce_bool(self, value, default=False):
+        if value is None:
+            return default
         if isinstance(value, bool):
             return value
         if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on", "启用", "开启"}
+            value = value.strip().lower()
+            if not value:
+                return default
+            if value in {"1", "true", "yes", "on", "启用", "开启", "打开"}:
+                return True
+            if value in {"0", "false", "no", "off", "禁用", "关闭", "关"}:
+                return False
         return bool(value)
 
     def _get_config_int(self, key, default, min_value=None, max_value=None):
@@ -352,6 +370,300 @@ class Quote_Plugin(Star):
             logger.error(f"保存或裁剪渲染图片失败: {e}, image_url={image_url}")
         return None
 
+    #region 群相册上传
+    def _format_group_id_for_api(self, group_id):
+        try:
+            return int(group_id)
+        except (TypeError, ValueError):
+            return group_id
+
+    async def _call_onebot_action(self, event: AstrMessageEvent, action: str, **payload):
+        bot = getattr(event, "bot", None)
+        api = getattr(bot, "api", None)
+        if api and hasattr(api, "call_action"):
+            return await api.call_action(action, **payload)
+        if bot and hasattr(bot, "call_action"):
+            return await bot.call_action(action, **payload)
+        raise RuntimeError("当前平台不支持 OneBot API 调用")
+
+    def _extract_album_list(self, payload):
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+
+        candidates = [payload]
+        data = payload.get("data")
+        if isinstance(data, (dict, list)):
+            candidates.append(data)
+
+        for candidate in candidates:
+            if isinstance(candidate, list):
+                albums = [item for item in candidate if isinstance(item, dict)]
+                if albums:
+                    return albums
+            if isinstance(candidate, dict):
+                for key in ("album_list", "albums", "list"):
+                    value = candidate.get(key)
+                    if isinstance(value, list):
+                        albums = [item for item in value if isinstance(item, dict)]
+                        if albums:
+                            return albums
+        return []
+
+    def _album_item_id(self, album):
+        value = album.get("album_id") or album.get("id")
+        return str(value).strip() if value is not None else ""
+
+    def _album_item_name(self, album):
+        value = album.get("album_name") or album.get("name")
+        return str(value).strip() if value is not None else ""
+
+    async def _get_group_album_list(self, event: AstrMessageEvent, group_id):
+        if not isinstance(event, AiocqhttpMessageEvent):
+            logger.info("当前平台不是 aiocqhttp，无法获取群相册列表")
+            return []
+
+        api_group_id = self._format_group_id_for_api(group_id)
+        actions = [
+            ("get_qun_album_list", {"group_id": api_group_id, "attach_info": ""}),
+            ("get_group_album_list", {"group_id": api_group_id}),
+            ("get_group_albums", {"group_id": api_group_id}),
+            ("get_group_root_album_list", {"group_id": api_group_id}),
+        ]
+
+        for action, payload in actions:
+            try:
+                result = await self._call_onebot_action(event, action, **payload)
+                albums = self._extract_album_list(result)
+                if albums:
+                    logger.debug(f"通过 {action} 获取到 {len(albums)} 个群相册")
+                    return albums
+            except Exception as e:
+                logger.debug(f"获取群相册列表接口 {action} 调用失败: {e}")
+        return []
+
+    def _get_effective_album_upload_settings(self):
+        group_settings = getattr(self, "admin_settings", {}) or {}
+
+        def get_bool(key, default):
+            if key in group_settings:
+                return self._coerce_bool(group_settings.get(key), default)
+            return default
+
+        def get_str(key, default):
+            value = group_settings.get(key, default)
+            if value is None:
+                return ""
+            return str(value).strip()
+
+        return {
+            "enabled": get_bool("album_upload_enabled", self.enable_album_upload),
+            "album_name": get_str("album_name", self.album_name),
+            "album_id": get_str("album_id", self.album_id),
+            "strict": get_bool("album_upload_strict", self.album_upload_strict),
+            "base64_fallback": get_bool("album_upload_use_base64_fallback", self.album_upload_use_base64_fallback),
+            "show_result": get_bool("album_upload_show_result", self.album_upload_show_result),
+        }
+
+    async def _resolve_album_target(self, event: AstrMessageEvent, group_id, settings):
+        album_id = settings["album_id"]
+        album_name = settings["album_name"]
+        albums = []
+
+        if album_name and not album_id:
+            albums = await self._get_group_album_list(event, group_id)
+            for album in albums:
+                if self._album_item_name(album) == album_name:
+                    album_id = self._album_item_id(album)
+                    if album_id:
+                        return album_id, album_name, ""
+
+            message = f"未找到名为“{album_name}”的群相册"
+            if settings["strict"]:
+                logger.info(message)
+            return "", "", message
+
+        if album_id and not album_name:
+            albums = await self._get_group_album_list(event, group_id)
+            for album in albums:
+                if self._album_item_id(album) == album_id:
+                    album_name = self._album_item_name(album)
+                    break
+
+        if not album_id:
+            return "", "", "未配置目标相册 ID 或名称"
+
+        return album_id, album_name, ""
+
+    def _read_file_as_base64(self, file_path):
+        try:
+            if not os.path.exists(file_path):
+                return None
+            with open(file_path, "rb") as f:
+                return f"base64://{base64.b64encode(f.read()).decode('utf-8')}"
+        except Exception as e:
+            logger.error(f"读取图片并转换 Base64 失败: {e}")
+            return None
+
+    async def _call_album_upload(self, event: AstrMessageEvent, group_id, album_id, album_name, file_value):
+        api_group_id = self._format_group_id_for_api(group_id)
+        params = {
+            "group_id": api_group_id,
+            "album_id": str(album_id),
+            "album_name": album_name or "",
+            "file": file_value,
+        }
+        llbot_params = {
+            "group_id": api_group_id,
+            "album_id": str(album_id),
+            "files": [file_value],
+        }
+        if album_name:
+            llbot_params["album_name"] = album_name
+
+        candidates = [
+            ("upload_image_to_qun_album", params),
+            ("upload_group_album", params),
+            ("upload_qun_album", params),
+            ("upload_group_album", llbot_params),
+        ]
+        last_error = None
+
+        for action, payload in candidates:
+            try:
+                await self._call_onebot_action(event, action, **payload)
+                logger.info(f"群相册上传成功: action={action}, group_id={group_id}, album_id={album_id}")
+                return True, action
+            except Exception as e:
+                last_error = e
+                logger.debug(f"群相册上传接口 {action} 调用失败: {e}")
+
+        return False, str(last_error) if last_error else "所有相册上传接口均调用失败"
+
+    async def _upload_image_to_group_album(self, event: AstrMessageEvent, group_id, image_path, settings):
+        if not isinstance(event, AiocqhttpMessageEvent):
+            return False, "当前平台不支持群相册上传"
+        if not image_path or not os.path.exists(image_path):
+            return False, "图片文件不存在"
+
+        album_id, album_name, reason = await self._resolve_album_target(event, group_id, settings)
+        if not album_id:
+            return False, reason or "未找到目标相册"
+
+        abs_path = os.path.abspath(image_path)
+        ok, detail = await self._call_album_upload(event, group_id, album_id, album_name, abs_path)
+        if ok:
+            return True, detail
+
+        if settings["base64_fallback"]:
+            encoded = self._read_file_as_base64(abs_path)
+            if encoded:
+                ok, detail = await self._call_album_upload(event, group_id, album_id, album_name, encoded)
+                if ok:
+                    return True, detail
+
+        return False, detail
+
+    async def _album_upload_result_suffix(self, event: AstrMessageEvent, group_id, image_path):
+        settings = self._get_effective_album_upload_settings()
+        if not settings["enabled"]:
+            return ""
+
+        ok, detail = await self._upload_image_to_group_album(event, group_id, image_path, settings)
+        if not settings["show_result"]:
+            return ""
+        if ok:
+            return "\n已上传到群相册"
+        return f"\n群相册上传失败：{detail}"
+
+    def _format_album_upload_status(self):
+        settings = self._get_effective_album_upload_settings()
+        enabled_text = "开启" if settings["enabled"] else "关闭"
+        strict_text = "开启" if settings["strict"] else "关闭"
+        fallback_text = "开启" if settings["base64_fallback"] else "关闭"
+        album_name = settings["album_name"] or "未配置"
+        album_id = settings["album_id"] or "未配置"
+        return (
+            f"⭐群相册上传：{enabled_text}\n"
+            f"目标相册名称：{album_name}\n"
+            f"目标相册ID：{album_id}\n"
+            f"严格匹配：{strict_text}\n"
+            f"Base64兜底：{fallback_text}"
+        )
+
+    async def _handle_album_command(self, event: AstrMessageEvent, group_id, msg):
+        args = msg[len("语录相册"):].strip()
+        if args in {"", "状态"}:
+            return self._format_album_upload_status()
+
+        if args in {"开启", "启用", "打开"}:
+            self.admin_settings["album_upload_enabled"] = True
+            self._save_admin_settings()
+            return "⭐群相册上传已开启"
+
+        if args in {"关闭", "禁用", "关"}:
+            self.admin_settings["album_upload_enabled"] = False
+            self._save_admin_settings()
+            return "⭐群相册上传已关闭"
+
+        if args in {"严格开启", "开启严格"}:
+            self.admin_settings["album_upload_strict"] = True
+            self._save_admin_settings()
+            return "⭐群相册严格匹配已开启"
+
+        if args in {"严格关闭", "关闭严格"}:
+            self.admin_settings["album_upload_strict"] = False
+            self._save_admin_settings()
+            return "⭐群相册严格匹配已关闭"
+
+        if args in {"重置", "清除"}:
+            for key in ("album_upload_enabled", "album_name", "album_id", "album_upload_strict"):
+                self.admin_settings.pop(key, None)
+            self._save_admin_settings()
+            return "⭐群相册上传设置已恢复为插件配置"
+
+        if args == "列表":
+            albums = await self._get_group_album_list(event, group_id)
+            if not albums:
+                return "⭐未获取到群相册列表，请确认当前协议端支持 NapCat 群相册接口"
+            lines = ["⭐群相册列表："]
+            for album in albums[:20]:
+                name = self._album_item_name(album) or "未命名相册"
+                aid = self._album_item_id(album) or "无ID"
+                lines.append(f"{name}：{aid}")
+            if len(albums) > 20:
+                lines.append(f"仅显示前20个，共{len(albums)}个")
+            return "\n".join(lines)
+
+        if args.startswith("名称"):
+            album_name = args[len("名称"):].strip()
+            if not album_name:
+                return "⭐请输入相册名称，例如：语录相册 名称 黑历史"
+            self.admin_settings["album_name"] = album_name
+            self._save_admin_settings()
+            return f"⭐目标相册名称已设置为：{album_name}"
+
+        upper_args = args.upper()
+        if upper_args.startswith("ID"):
+            album_id = args[2:].strip()
+            if not album_id:
+                return "⭐请输入相册ID，例如：语录相册 ID 123456"
+            self.admin_settings["album_id"] = album_id
+            self._save_admin_settings()
+            return f"⭐目标相册ID已设置为：{album_id}"
+
+        return (
+            "⭐语录相册命令：\n"
+            "语录相册 状态\n"
+            "语录相册 列表\n"
+            "语录相册 开启/关闭\n"
+            "语录相册 名称 相册名\n"
+            "语录相册 ID 相册ID\n"
+            "语录相册 严格开启/严格关闭\n"
+            "语录相册 重置"
+        )
+
     #region 下载语录图片
     async def download_image(self, event: AstrMessageEvent, file_id: str, group_id) -> bytes:
         try:
@@ -481,6 +793,13 @@ class Quote_Plugin(Star):
                     texts += "\n  2：全体成员均可投稿"
                 yield event.plain_result(texts)
 
+        elif msg.startswith("语录相册"):
+            if not self.is_admin(user_id):
+                yield event.plain_result("权限不足，仅可由bot管理员设置")
+                return
+            result = await self._handle_album_command(event, group_id, msg)
+            yield event.plain_result(result)
+
         elif msg.startswith("戳戳冷却"):
             if not self.is_admin(user_id):
                 yield event.plain_result("权限不足，仅可由bot管理员设置")
@@ -586,9 +905,11 @@ class Quote_Plugin(Star):
                     msg_id = str(event.message_obj.message_id)
                     
                     if file_path and os.path.exists(file_path):
+                        result_text = "⭐语录投稿成功！"
+                        result_text += await self._album_upload_result_suffix(event, group_id, file_path)
                         chain = [
                             Reply(id=msg_id),
-                            Plain(text="⭐语录投稿成功！")
+                            Plain(text=result_text)
                         ]
                     else:
                         chain = [
