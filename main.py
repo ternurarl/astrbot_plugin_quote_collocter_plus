@@ -5,12 +5,20 @@ import json
 import yaml
 import aiohttp
 import re
+from io import BytesIO
 from astrbot import logger
 from astrbot.core.message.components import Image, Reply, At, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.api.all import *
 
-@register("quote_collocter_plus", "ternurarl", "发送"语录投稿+图片"或回复图片发送"语录投稿"来存储群友的黑历史！发送"/语录"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.0")
+try:
+    from PIL import Image as PILImage, ImageDraw, ImageFont
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_AVAILABLE = False
+    logger.warning("Pillow 未安装，气泡语录图片功能不可用。请执行 pip install pillow 安装。")
+
+@register("quote_collocter_plus", "ternurarl", '发送"语录投稿/入典+图片"或回复图片/文本发送"语录投稿"/"入典"来存储群友的黑历史！发送"/语录"随机查看一条。bot会在被戳一戳时随机发送一张语录', "1.0")
 class Quote_Plugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -88,6 +96,154 @@ class Quote_Plugin(Star):
             if match:
                 value = match.group()    
         return value
+
+    #region 气泡语录生成
+    async def _download_avatar_bytes(self, user_id: str):
+        avatar_url = f"https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
+                    logger.error(f"下载头像失败 HTTP {resp.status}")
+        except Exception as e:
+            logger.error(f"下载头像异常: {e}")
+        return None
+
+    def _wrap_text(self, text: str, font, max_width: int):
+        lines = []
+        if not text:
+            return [""]
+        draw = ImageDraw.Draw(PILImage.new("RGB", (10, 10)))
+        current = ""
+        for ch in text:
+            test = current + ch
+            w = draw.textbbox((0, 0), test, font=font)[2]
+            if w <= max_width:
+                current = test
+            else:
+                if current:
+                    lines.append(current)
+                current = ch
+        if current:
+            lines.append(current)
+        return lines if lines else [""]
+
+    async def _render_bubble_quote_image(
+        self,
+        group_id: str,
+        speaker_id: str,
+        speaker_name: str,
+        text: str
+    ):
+        if not _PIL_AVAILABLE:
+            logger.error("Pillow 未安装，无法生成气泡语录图片")
+            return None
+        try:
+            avatar_bytes = await self._download_avatar_bytes(str(speaker_id))
+            if not avatar_bytes:
+                return None
+
+            # 字体：优先使用系统中文字体，找不到就使用默认
+            font = None
+            name_font = None
+            for font_name in ["msyh.ttc", "simhei.ttf", "NotoSansCJK-Regular.ttc",
+                               "wqy-zenhei.ttc", "Arial Unicode MS.ttf"]:
+                try:
+                    font = ImageFont.truetype(font_name, 28)
+                    name_font = ImageFont.truetype(font_name, 24)
+                    break
+                except Exception:
+                    continue
+            if font is None:
+                font = ImageFont.load_default()
+                name_font = ImageFont.load_default()
+
+            # 画布参数
+            padding = 28
+            avatar_size = 96
+            bubble_padding_x = 22
+            bubble_padding_y = 16
+            line_gap = 10
+            max_text_width = 720
+
+            text = (text or "").strip() or "（无文本内容）"
+            lines = self._wrap_text(text, font, max_text_width)
+
+            # 计算气泡大小
+            dummy_draw = ImageDraw.Draw(PILImage.new("RGB", (10, 10)))
+            line_heights = []
+            text_w = 0
+            for ln in lines:
+                bbox = dummy_draw.textbbox((0, 0), ln, font=font)
+                w = bbox[2] - bbox[0]
+                h = bbox[3] - bbox[1]
+                text_w = max(text_w, w)
+                line_heights.append(h if h > 0 else 30)
+
+            text_h = sum(line_heights) + line_gap * (max(len(lines) - 1, 0))
+            bubble_w = text_w + bubble_padding_x * 2
+            bubble_h = text_h + bubble_padding_y * 2
+
+            width = padding + avatar_size + 18 + bubble_w + padding
+            height = max(padding * 2 + avatar_size, padding * 2 + 30 + bubble_h)
+
+            canvas = PILImage.new("RGB", (width, height), (245, 246, 250))
+            draw = ImageDraw.Draw(canvas)
+
+            # 头像裁圆
+            avatar = PILImage.open(BytesIO(avatar_bytes)).convert("RGB").resize((avatar_size, avatar_size))
+            mask = PILImage.new("L", (avatar_size, avatar_size), 0)
+            mdraw = ImageDraw.Draw(mask)
+            mdraw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+            avatar_x = padding
+            avatar_y = padding
+            canvas.paste(avatar, (avatar_x, avatar_y), mask)
+
+            # 昵称
+            name = (speaker_name or str(speaker_id))[:30]
+            name_x = avatar_x + avatar_size + 18
+            name_y = padding
+            draw.text((name_x, name_y), name, fill=(100, 100, 100), font=name_font)
+
+            # 气泡
+            bubble_x = name_x
+            bubble_y = name_y + 34
+            r = 18
+            draw.rounded_rectangle(
+                (bubble_x, bubble_y, bubble_x + bubble_w, bubble_y + bubble_h),
+                radius=r,
+                fill=(255, 255, 255),
+                outline=(220, 220, 220),
+                width=2
+            )
+
+            # 小尾巴（三角形）
+            tail = [
+                (bubble_x - 12, bubble_y + 22),
+                (bubble_x, bubble_y + 18),
+                (bubble_x, bubble_y + 34),
+            ]
+            draw.polygon(tail, fill=(255, 255, 255))
+            draw.line([tail[0], tail[1]], fill=(220, 220, 220), width=2)
+            draw.line([tail[0], tail[2]], fill=(220, 220, 220), width=2)
+
+            # 文本
+            tx = bubble_x + bubble_padding_x
+            ty = bubble_y + bubble_padding_y
+            for i, ln in enumerate(lines):
+                draw.text((tx, ty), ln, fill=(30, 30, 30), font=font)
+                ty += line_heights[i] + line_gap
+
+            # 保存
+            group_folder = os.path.join(self.quotes_data_path, str(group_id))
+            os.makedirs(group_folder, exist_ok=True)
+            out_path = os.path.join(group_folder, f"quote_bubble_{int(time.time() * 1000)}_{random.randint(1000, 9999)}.jpg")
+            canvas.save(out_path, format="JPEG", quality=95)
+            return out_path
+        except Exception as e:
+            logger.error(f"生成气泡图失败: {e}")
+            return None
 
     #region 下载语录图片
     async def download_image(self, event: AstrMessageEvent, file_id: str, group_id) -> bytes:
@@ -202,7 +358,7 @@ class Quote_Plugin(Star):
                 return
             set_mode = self.gain_mode(event)
             if not set_mode:
-                yield event.plain_result(f"⭐请输入"投稿权限+数字"来设置\n  0：关闭投稿系统\n  1：仅管理员可投稿\n  2：全体成员均可投稿\n当前群聊权限设置为：{self.admin_settings.get('mode', 0)}")
+                yield event.plain_result(f'⭐请输入"投稿权限+数字"来设置\n  0：关闭投稿系统\n  1：仅管理员可投稿\n  2：全体成员均可投稿\n当前群聊权限设置为：{self.admin_settings.get("mode", 0)}')
             else:
                 if set_mode not in ["0", "1", "2"]:
                     yield event.plain_result("⭐模式数字范围出错！请输入正确的模式\n  0：关闭投稿系统\n  1：仅管理员可投稿\n  2：全体成员均可投稿")
@@ -224,7 +380,7 @@ class Quote_Plugin(Star):
                 return
             set_coldown = self.gain_mode(event)
             if not set_coldown:
-                yield event.plain_result(f"⭐请输入"戳戳冷却+数字"来设置，单位为秒\n")
+                yield event.plain_result(f'⭐请输入"戳戳冷却+数字"来设置，单位为秒\n')
                 return
             if 'coldown' in self.admin_settings:
                 self.admin_settings['coldown'] = int(set_coldown)
@@ -243,66 +399,105 @@ class Quote_Plugin(Star):
             if selected_image_path:
                 yield event.image_result(selected_image_path)
             else:
-                yield event.plain_result("⭐本群还没有群友语录哦~\n请发送"语录投稿+图片"进行添加！")
+                yield event.plain_result('⭐本群还没有群友语录哦~\n请发送"语录投稿/入典+图片"进行添加！')
         # --------------------
 
-        elif msg.startswith("语录投稿"):
+        elif msg.startswith("语录投稿") or msg.startswith("入典"):
             current_mode = self.admin_settings.get('mode', 0)
             if current_mode == 0:
-                yield event.plain_result("⭐投稿系统未开启，请联系bot管理员发送"投稿权限"来设置")
+                yield event.plain_result('⭐投稿系统未开启，请联系bot管理员发送"投稿权限"来设置')
                 return
             if current_mode == 1:
                 if not self.is_admin(user_id):
-                    yield event.plain_result("⭐权限不足，当前权限设置为"仅bot管理员可投稿"\n可由bot管理员发送"投稿权限"来设置")
+                    yield event.plain_result('⭐权限不足，当前权限设置为"仅bot管理员可投稿"\n可由bot管理员发送"投稿权限"来设置')
                     return
-            
+
             file_id = None
-            
+            reply_text = None
+            reply_user_id = None
+            reply_nickname = None
+
             # 1. 检查当前消息中是否有图片
             messages = event.message_obj.message
-            image_comp = next((msg for msg in messages if isinstance(msg, Image)), None)
-            
+            image_comp = next((m for m in messages if isinstance(m, Image)), None)
+
             if image_comp:
                 file_id = image_comp.file
             else:
                 # 2. 如果当前消息没图片，检查是否引用了消息
-                reply_comp = next((msg for msg in messages if isinstance(msg, Reply)), None)
+                reply_comp = next((m for m in messages if isinstance(m, Reply)), None)
                 if reply_comp:
                     try:
                         logger.info(f"检测到引用回复，尝试获取消息ID: {reply_comp.id}")
                         reply_id = int(reply_comp.id) if str(reply_comp.id).isdigit() else reply_comp.id
                         reply_msg = await event.bot.api.call_action('get_msg', message_id=reply_id)
-                        
+
                         if reply_msg and 'message' in reply_msg:
+                            reply_user_id = str(reply_msg.get("sender", {}).get("user_id", ""))
+                            reply_nickname = (
+                                reply_msg.get("sender", {}).get("card")
+                                or reply_msg.get("sender", {}).get("nickname")
+                                or reply_user_id
+                            )
                             chain = reply_msg['message']
                             if isinstance(chain, list):
                                 for part in chain:
                                     if part.get('type') == 'image':
                                         file_id = part.get('data', {}).get('file')
                                         break
+                                # 引用消息无图片时提取文本
+                                if not file_id:
+                                    texts = [
+                                        part.get('data', {}).get('text', '')
+                                        for part in chain
+                                        if part.get('type') == 'text'
+                                    ]
+                                    reply_text = "".join(texts).strip()
                             elif isinstance(chain, str):
                                 match = re.search(r'\[CQ:image,[^\]]*file=([^,\]]+)', chain)
                                 if match:
                                     file_id = match.group(1)
+                                else:
+                                    reply_text = re.sub(r'\[CQ:[^\]]+\]', '', chain).strip()
 
                     except Exception as e:
                         logger.error(f"获取引用消息失败: {e}")
 
+            # 3. 若无图片但有引用文本，自动生成气泡语录图
+            if not file_id and reply_text:
+                try:
+                    self.create_group_folder(group_id)
+                    bubble_path = await self._render_bubble_quote_image(
+                        group_id=group_id,
+                        speaker_id=reply_user_id or user_id,
+                        speaker_name=reply_nickname or "群友",
+                        text=reply_text
+                    )
+                    msg_id = str(event.message_obj.message_id)
+                    if bubble_path and os.path.exists(bubble_path):
+                        yield event.chain_result([Reply(id=msg_id), Plain(text="⭐入典成功（已生成气泡语录图）！")])
+                    else:
+                        yield event.plain_result("⭐投稿失败：生成气泡语录图失败")
+                except Exception as e:
+                    logger.error(f"生成气泡语录图过程出错: {e}")
+                    yield event.plain_result(f"⭐投稿失败: {str(e)}")
+                return
+
             if not file_id:
                 chain = [
                     At(qq=user_id),
-                    Plain(text="\n你是不是忘发图啦？\n请直接"语录投稿+图片"或者"引用图片并发送语录投稿"")
+                    Plain(text='\n你是不是忘发图啦？\n请直接"语录投稿/入典+图片"或者"引用图片并发送语录投稿/入典"，也可以引用文本消息自动生成气泡语录')
                 ]
                 yield event.chain_result(chain)
                 return
-                            
+
             try:
                 self.create_group_folder(group_id)
                 # 下载并保存图片
                 try:
                     file_path = await self.download_image(event, file_id, group_id)
                     msg_id = str(event.message_obj.message_id)
-                    
+
                     if file_path and os.path.exists(file_path):
                         chain = [
                             Reply(id=msg_id),
