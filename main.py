@@ -21,6 +21,13 @@ class Quote_Plugin(Star):
     BUBBLE_TEXT_MAX_LENGTH = 3000
     BUBBLE_FONT_SIZE = 16
     BUBBLE_LINE_HEIGHT = 1.6
+    BUBBLE_BASE_PADDING = 56
+    BUBBLE_MIN_WEIGHTED_CHARS = 6.0
+    BUBBLE_MAX_WEIGHTED_CHARS = 120.0
+    BUBBLE_CHAR_WIDTH_PX = 8.0
+    BUBBLE_LINE_BONUS_PX = 16
+    BUBBLE_MAX_LINE_BONUS_PX = 120
+    BUBBLE_CONTAINER_EXTRA_WIDTH = 90
 
     TMPL = '''
 <div style="display:inline-flex;align-items:flex-start;gap:10px;padding:12px;background:#f5f5f5;max-width:{{ container_max_width }}px;box-sizing:border-box;">
@@ -140,7 +147,7 @@ class Quote_Plugin(Star):
                 total += 1.0
         return total
 
-    def _prepare_render_text(self, value: str, *, fallback: str) -> str:
+    def _prepare_render_text(self, value: str | None, *, fallback: str) -> str:
         value = "" if value is None else str(value)
         if len(value) > self.BUBBLE_TEXT_MAX_LENGTH:
             value = value[: self.BUBBLE_TEXT_MAX_LENGTH] + "…"
@@ -149,12 +156,20 @@ class Quote_Plugin(Star):
         return value
 
     def _calc_bubble_width(self, text: str) -> tuple[int, int]:
-        lines = text.splitlines() or [text]
+        lines = text.splitlines()
+        if not lines:
+            lines = [text]
         longest = max((self._weighted_line_length(line) for line in lines), default=0.0)
         line_count = max(len(lines), 1)
+        clamped_longest = max(
+            self.BUBBLE_MIN_WEIGHTED_CHARS,
+            min(longest, self.BUBBLE_MAX_WEIGHTED_CHARS),
+        )
 
-        base_width = 56 + int(min(max(longest, 6.0), 120.0) * 8.0)
-        line_bonus = min((line_count - 1) * 16, 120)
+        base_width = self.BUBBLE_BASE_PADDING + int(
+            clamped_longest * self.BUBBLE_CHAR_WIDTH_PX
+        )
+        line_bonus = min((line_count - 1) * self.BUBBLE_LINE_BONUS_PX, self.BUBBLE_MAX_LINE_BONUS_PX)
         preferred_width = base_width + line_bonus
 
         max_width = max(self.BUBBLE_MIN_WIDTH, min(preferred_width, self.BUBBLE_MAX_WIDTH))
@@ -173,7 +188,7 @@ class Quote_Plugin(Star):
             "text": safe_text,
             "min_width": min_width,
             "max_width": max_width,
-            "container_max_width": max_width + 90,
+            "container_max_width": max_width + self.BUBBLE_CONTAINER_EXTRA_WIDTH,
             "text_container_max_width": max_width,
             "bubble_padding": "10px 14px",
             "font_size": self.BUBBLE_FONT_SIZE,
@@ -183,7 +198,6 @@ class Quote_Plugin(Star):
             "full_page": True,
             "type": "jpeg",
             "quality": 60,
-            "scale": "css",
             "animations": "disabled",
             "caret": "hide"
         }
