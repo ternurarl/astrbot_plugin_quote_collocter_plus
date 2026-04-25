@@ -64,23 +64,19 @@ class Quote_Plugin(Star):
                 return v.strip().lower() in {"1", "true", "yes", "y", "on"}
             return default
 
-        style = str(
-            _get("quote_collector_plus_render_style", "quote_collocter_plus_render_style", default="qqbox")
-        ).strip().lower() or "qqbox"
-        image_format = str(
-            _get("quote_collector_plus_render_format", "quote_collocter_plus_render_format", default="jpg")
-        ).strip().lower() or "jpg"
+        style = str(_get("quote_collector_plus_render_style", default="qqbox")).strip().lower() or "qqbox"
+        image_format = str(_get("quote_collector_plus_render_format", default="jpg")).strip().lower() or "jpg"
         quality = _as_int(
-            _get("quote_collector_plus_render_quality", "quote_collocter_plus_render_quality", default=92),
+            _get("quote_collector_plus_render_quality", default=92),
             92
         )
         quality = max(1, min(100, quality))
         transparent_bg = _as_bool(
-            _get("quote_collector_plus_render_transparent_bg", "quote_collocter_plus_render_transparent_bg", default=False),
+            _get("quote_collector_plus_render_transparent_bg", default=False),
             False
         )
         max_width = _as_int(
-            _get("quote_collector_plus_render_max_width", "quote_collocter_plus_render_max_width", default=720),
+            _get("quote_collector_plus_render_max_width", default=720),
             720
         )
         max_width = max(320, min(1280, max_width))
@@ -324,7 +320,10 @@ class Quote_Plugin(Star):
             if remain <= 0:
                 break
             if len(ln) > remain:
-                out.append((ln[: max(remain - 1, 0)] + "…") if remain > 0 else "…")
+                if remain <= 1:
+                    out.append("…")
+                else:
+                    out.append(ln[: remain - 1] + "…")
                 total = max_chars
                 break
             out.append(ln)
@@ -376,6 +375,10 @@ class Quote_Plugin(Star):
         if transparent_bg:
             return PILImage.new("RGBA", (width, height), (0, 0, 0, 0))
         return PILImage.new("RGB", (width, height), (238, 242, 252))
+
+    def _quality_to_png_compress_level(self, quality: int):
+        safe_quality = max(1, min(100, int(quality)))
+        return round((100 - safe_quality) * 9 / 99)
 
     def _draw_qqbox_bubble(self, draw, bubble_box):
         bubble_x, bubble_y, bubble_r, bubble_b = bubble_box
@@ -482,7 +485,7 @@ class Quote_Plugin(Star):
                 canvas.save(
                     out_path,
                     format="PNG",
-                    compress_level=max(0, min(9, int((100 - self.render_config.get("quality", 92)) / 11))),
+                    compress_level=self._quality_to_png_compress_level(self.render_config.get("quality", 92)),
                     optimize=True
                 )
             else:

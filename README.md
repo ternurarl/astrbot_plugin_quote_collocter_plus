@@ -21,7 +21,7 @@
 - 仅替换“引用文本生成图”分支，不影响原有图片投稿、投稿权限、戳戳冷却与随机发送逻辑。
 
 ### 渲染配置（AstrBot 全局配置）
-支持以下配置项（含旧拼写 `quote_collocter_plus_*` 兼容键）：
+支持以下配置项：
 
 - `quote_collector_plus_render_style`：渲染风格，默认 `qqbox`，可设为 `off`/`none` 关闭文本转图
 - `quote_collector_plus_render_format`：导出格式，`jpg`（默认）或 `png`
