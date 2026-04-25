@@ -17,7 +17,7 @@ from astrbot.core.message.components import Image, Reply, At, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.api.all import *
 
-@register("quote_collocter_plus", "ternurarl", "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.4")
+@register("astrbot_plugin_quote_collocter_plus", "ternurarl", "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.4.1")
 class Quote_Plugin(Star):
     BUBBLE_MIN_WIDTH = 140
     BUBBLE_MAX_WIDTH = 640
