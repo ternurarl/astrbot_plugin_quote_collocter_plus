@@ -31,7 +31,7 @@ class Quote_Plugin(Star):
     BUBBLE_CONTAINER_EXTRA_WIDTH = 90
 
     TMPL = '''
-<div style="display:inline-flex;align-items:flex-start;gap:10px;padding:12px;background:#f5f5f5;max-width:{{ container_max_width }}px;box-sizing:border-box;">
+<div style="display:inline-flex;align-items:flex-start;gap:10px;padding:12px;background:transparent;max-width:{{ container_max_width }}px;box-sizing:border-box;">
   <img src="{{ avatar }}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;" />
   <div style="display:flex;flex-direction:column;align-items:flex-start;max-width:{{ text_container_max_width }}px;">
     <div style="font-size:14px;color:#8c8c8c;line-height:1.4;margin-bottom:6px;">{{ name }}</div>
@@ -234,23 +234,22 @@ class Quote_Plugin(Star):
             # 2. 图片获取成功后，执行精准裁剪
             if is_saved:
                 with PILImage.open(save_path) as img:
-                    bbox = img.getbbox() # 获取非透明区域（即你的气泡）的精准边界框
+                    rgba = img.convert("RGBA")
+                    # 优先根据透明通道裁剪，避免把整页背景当成内容
+                    bbox = rgba.getchannel("A").getbbox()
                     if bbox:
                         pad = 12 # 设置你需要的边缘留白像素
                         crop_box = (
                             max(0, bbox[0] - pad), 
                             max(0, bbox[1] - pad),
-                            min(img.width, bbox[2] + pad), 
-                            min(img.height, bbox[3] + pad)
+                            min(rgba.width, bbox[2] + pad), 
+                            min(rgba.height, bbox[3] + pad)
                         )
-                        cropped = img.crop(crop_box)
+                        cropped = rgba.crop(crop_box)
                         
                         # 转换回纯白底色的 JPEG 以压缩存储体积
-                        bg = Image.new("RGB", cropped.size, (255, 255, 255))
-                        if cropped.mode in ('RGBA', 'LA'):
-                            bg.paste(cropped, mask=cropped.split()[-1])
-                        else:
-                            bg.paste(cropped)
+                        bg = PILImage.new("RGB", cropped.size, (255, 255, 255))
+                        bg.paste(cropped, mask=cropped.getchannel("A"))
                         bg.save(save_path, "JPEG", quality=85)
                 
                 return save_path
