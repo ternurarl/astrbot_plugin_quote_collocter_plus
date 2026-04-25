@@ -3,6 +3,9 @@
 
 > Fork 自 [litsum/astrbot_plugin_quote_collocter](https://github.com/litsum/astrbot_plugin_quote_collocter)
 
+##注意
+本插件由AI史量级生成,有问题请直接转给AI
+
 ## 使用方法
 发送"语录投稿+图片"或者"入典+图片"，bot会将群u语录保存到本地（不同群聊相互隔离）  
 如果你的qq未开启半屏相册发图功能，可以通过【qq左划→设置→通用→图片、视频→发图方式】进行修改  
