@@ -308,7 +308,7 @@ class Quote_Plugin(Star):
                     current = test
                     continue
                 if current:
-                    if current[-1] in QQBOX_OPENING_PUNCT and len(current) > 1:
+                    if len(current) > 1 and current[-1] in QQBOX_OPENING_PUNCT:
                         moved = current[-1]
                         all_lines.append(current[:-1])
                         current = moved + ch
@@ -347,7 +347,7 @@ class Quote_Plugin(Star):
             total += len(ln)
         if not out:
             return ["（无文本内容）"]
-        if len(lines) > len(out):
+        if out and len(lines) > len(out):
             out[-1] = (out[-1][:-1] + "…") if out[-1] else "…"
         return out
 
@@ -397,6 +397,7 @@ class Quote_Plugin(Star):
         safe_quality = max(1, min(100, int(quality)))
         # 将质量(1-100, 越高越好)映射到 PNG compress_level(0-9, 越高压缩越强)。
         # 因为两者方向相反，使用 (100-quality) 线性缩放到 0-9。
+        # 这里除以 99 而不是 100，是为了让 quality=1/100 精确落在 9/0 两端。
         return round((100 - safe_quality) * 9 / 99)
 
     def _draw_qqbox_bubble(self, draw, bubble_box):
@@ -489,6 +490,7 @@ class Quote_Plugin(Star):
                 try:
                     draw.text((tx, ty), safe_ln, fill=(34, 40, 52), font=font)
                 except Exception:
+                    logger.warning(f"文本绘制失败，已回退替换字符: {safe_ln[:30]}")
                     fallback_ln = safe_ln.encode("utf-8", "replace").decode("utf-8")
                     draw.text((tx, ty), fallback_ln, fill=(34, 40, 52), font=font)
                 ty += layout["line_heights"][i] + layout["line_gap"]
