@@ -25,9 +25,12 @@
 
 - `quote_collector_plus_render_style`：渲染风格，默认 `qqbox`，可设为 `off`/`none` 关闭文本转图
 - `quote_collector_plus_render_format`：导出格式，`jpg`（默认）或 `png`
-- `quote_collector_plus_render_quality`：导出质量，范围 `1-100`（同时影响 jpg 质量与 png 压缩等级）
+- `quote_collector_plus_render_quality`：导出质量，范围 `1-100`（jpg 为正向质量；png 会反向映射为压缩等级：质量越高压缩越低）
 - `quote_collector_plus_render_transparent_bg`：是否透明背景（主要对 png 生效）
 - `quote_collector_plus_render_max_width`：文本最大排版宽度，默认 `720`
+- `quote_collector_plus_render_max_lines`：文本最多行数，默认 `18`
+- `quote_collector_plus_render_max_chars`：文本最大字符数，默认 `600`
+- `quote_collector_plus_render_font_paths`：可选字体路径列表（列表或逗号分隔字符串）
 
 ### 文本排版与降级策略
 - 自动按最大宽度换行，包含基础标点换行优化（避免部分标点落在不合适位置）

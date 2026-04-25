@@ -19,6 +19,11 @@ except ImportError:
     _PIL_AVAILABLE = False
     logger.warning("Pillow 未安装，气泡语录图片功能不可用。请执行 pip install pillow 安装。")
 
+QQBOX_CLOSING_PUNCT = set("，。！？；：、,.!?;:)]】》」』”’")
+QQBOX_OPENING_PUNCT = set("([【《「『“‘")
+QQBOX_DEFAULT_MAX_LINES = 18
+QQBOX_DEFAULT_MAX_CHARS = 600
+
 @register("quote_collocter_plus", "ternurarl", '发送"语录投稿/入典+图片"或回复图片/文本发送"语录投稿"/"入典"来存储群友的黑历史！发送"/语录"随机查看一条。bot会在被戳一戳时随机发送一张语录', "1.0")
 class Quote_Plugin(Star):
     def __init__(self, context: Context):
@@ -80,6 +85,15 @@ class Quote_Plugin(Star):
             720
         )
         max_width = max(320, min(1280, max_width))
+        max_lines = _as_int(_get("quote_collector_plus_render_max_lines", default=QQBOX_DEFAULT_MAX_LINES), QQBOX_DEFAULT_MAX_LINES)
+        max_chars = _as_int(_get("quote_collector_plus_render_max_chars", default=QQBOX_DEFAULT_MAX_CHARS), QQBOX_DEFAULT_MAX_CHARS)
+        max_lines = max(1, min(50, max_lines))
+        max_chars = max(50, min(5000, max_chars))
+        font_paths = _get("quote_collector_plus_render_font_paths", default=[])
+        if isinstance(font_paths, str):
+            font_paths = [p.strip() for p in font_paths.split(",") if p.strip()]
+        if not isinstance(font_paths, list):
+            font_paths = []
 
         config = {
             "style": style,
@@ -87,6 +101,9 @@ class Quote_Plugin(Star):
             "quality": quality,
             "transparent_bg": transparent_bg,
             "max_text_width": max_width,
+            "max_lines": max_lines,
+            "max_chars": max_chars,
+            "font_paths": font_paths,
         }
         logger.info(f"quote_collector_plus 渲染配置：{config}")
         return config
@@ -225,10 +242,12 @@ class Quote_Plugin(Star):
     def _resolve_fonts(self):
         font = None
         name_font = None
-        candidates = [
-            "msyh.ttc", "simhei.ttf", "NotoSansCJK-Regular.ttc",
-            "wqy-zenhei.ttc", "Arial Unicode MS.ttf"
-        ]
+        custom_candidates = self.render_config.get("font_paths", []) or []
+        if os.name == "nt":
+            default_candidates = ["msyh.ttc", "simhei.ttf", "Arial Unicode MS.ttf", "NotoSansCJK-Regular.ttc", "wqy-zenhei.ttc"]
+        else:
+            default_candidates = ["NotoSansCJK-Regular.ttc", "wqy-zenhei.ttc", "msyh.ttc", "simhei.ttf", "Arial Unicode MS.ttf"]
+        candidates = custom_candidates + default_candidates
         for font_name in candidates:
             try:
                 font = ImageFont.truetype(font_name, 28)
@@ -277,8 +296,6 @@ class Quote_Plugin(Star):
     def _wrap_text(self, text: str, font, max_width: int):
         draw = ImageDraw.Draw(PILImage.new("RGB", (32, 32)))
         paragraphs = text.split("\n")
-        closing_punct = set("，。！？；：、,.!?;:)]】》」』”’")
-        opening_punct = set("([【《「『“‘")
         all_lines = []
         for para in paragraphs:
             if para == "":
@@ -291,11 +308,11 @@ class Quote_Plugin(Star):
                     current = test
                     continue
                 if current:
-                    if current[-1] in opening_punct and len(current) > 1:
+                    if current[-1] in QQBOX_OPENING_PUNCT and len(current) > 1:
                         moved = current[-1]
                         all_lines.append(current[:-1])
                         current = moved + ch
-                    elif ch in closing_punct:
+                    elif ch in QQBOX_CLOSING_PUNCT:
                         all_lines.append(current + ch)
                         current = ""
                     else:
@@ -309,8 +326,8 @@ class Quote_Plugin(Star):
         return all_lines if all_lines else [""]
 
     def _apply_long_text_strategy(self, lines):
-        max_lines = 18
-        max_chars = 600
+        max_lines = int(self.render_config.get("max_lines", QQBOX_DEFAULT_MAX_LINES))
+        max_chars = int(self.render_config.get("max_chars", QQBOX_DEFAULT_MAX_CHARS))
         total = 0
         out = []
         for ln in lines:
@@ -378,6 +395,8 @@ class Quote_Plugin(Star):
 
     def _quality_to_png_compress_level(self, quality: int):
         safe_quality = max(1, min(100, int(quality)))
+        # 将质量(1-100, 越高越好)映射到 PNG compress_level(0-9, 越高压缩越强)。
+        # 因为两者方向相反，使用 (100-quality) 线性缩放到 0-9。
         return round((100 - safe_quality) * 9 / 99)
 
     def _draw_qqbox_bubble(self, draw, bubble_box):
@@ -491,7 +510,10 @@ class Quote_Plugin(Star):
             else:
                 if canvas.mode != "RGB":
                     bg = PILImage.new("RGB", canvas.size, (238, 242, 252))
-                    bg.paste(canvas, mask=canvas.split()[-1] if canvas.mode == "RGBA" else None)
+                    if canvas.mode == "RGBA":
+                        bg.paste(canvas, mask=canvas.getchannel("A"))
+                    else:
+                        bg.paste(canvas.convert("RGB"))
                     canvas = bg
                 canvas.save(out_path, format="JPEG", quality=self.render_config.get("quality", 92), optimize=True)
             return out_path
