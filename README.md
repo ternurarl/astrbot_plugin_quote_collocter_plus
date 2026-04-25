@@ -15,8 +15,43 @@
 如果想要修改这个冷却，请发送"戳戳冷却+冷却时间"来设置，单位为秒  
 发送"/语录"或"语录"可以主动触发随机语录  
 
+## 引用文本转图（QQbox风格）
+- 当你**引用一条纯文本消息**并发送`语录投稿`/`入典`时，插件会自动生成气泡语录图并入典。
+- 当前渲染风格为 **QQbox**（头像 + 昵称 + 圆角气泡 + 尾巴 + 描边/阴影）。
+- 仅替换“引用文本生成图”分支，不影响原有图片投稿、投稿权限、戳戳冷却与随机发送逻辑。
+
+### 渲染配置（AstrBot 全局配置）
+支持以下配置项：
+
+- `quote_collector_plus_render_style`：渲染风格，默认 `qqbox`，可设为 `off`/`none` 关闭文本转图
+- `quote_collector_plus_render_format`：导出格式，`jpg`（默认）或 `png`
+- `quote_collector_plus_render_quality`：导出质量，范围 `1-100`（jpg 为正向质量；png 会反向映射为压缩等级：质量越高压缩越低）
+- `quote_collector_plus_render_transparent_bg`：是否透明背景（主要对 png 生效）
+- `quote_collector_plus_render_max_width`：文本最大排版宽度，默认 `720`
+- `quote_collector_plus_render_max_lines`：文本最多行数，默认 `18`
+- `quote_collector_plus_render_max_chars`：文本最大字符数，默认 `600`
+- `quote_collector_plus_render_font_paths`：可选字体路径列表（列表或逗号分隔字符串）
+
+### 文本排版与降级策略
+- 自动按最大宽度换行，包含基础标点换行优化（避免部分标点落在不合适位置）
+- 超长文本自动截断并追加省略号
+- 空文本自动降级为 `（无文本内容）`
+- 字体缺失时自动回退默认字体
+- 头像下载/解析失败时自动使用默认头像底图
+- Pillow 不可用时，仅“引用文本转图”分支给出可控提示，不影响其他功能
+
 ## 注意事项
 图片投稿没有限制，请自己注意审核
+
+## 依赖要求
+- 必需：`PyYAML`、`aiohttp`
+- 图像渲染：`Pillow`（已纳入 `requirements.txt`，建议直接安装全部依赖）
+
+安装示例：
+
+```bash
+pip install -r requirements.txt
+```
 
 ## 数据目录配置（Windows / Docker）
 插件会将图片与群配置统一存放在：
@@ -43,3 +78,7 @@
 ### 迁移说明
 - 若你此前使用默认 `data/quotes_data`，可直接将旧目录整体拷贝到新的 `<data_root>/quotes_data` 下完成迁移。
 - 目录结构保持不变即可，无需改动群号子目录内容。
+
+## 兼容说明
+- 数据路径规则与历史版本保持兼容（包含旧配置键兼容）。
+- 命令触发方式保持兼容：`语录投稿` / `入典` / `投稿权限` / `戳戳冷却` / `/语录`。
