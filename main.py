@@ -6,6 +6,8 @@ import yaml
 import aiohttp
 import re
 import uuid
+import html
+import unicodedata
 from urllib.parse import urlparse
 from astrbot import logger
 from astrbot.core.message.components import Image, Reply, At, Plain
@@ -14,12 +16,25 @@ from astrbot.api.all import *
 
 @register("quote_collocter_plus", "ternurarl", "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.0")
 class Quote_Plugin(Star):
+    BUBBLE_MIN_WIDTH = 140
+    BUBBLE_MAX_WIDTH = 640
+    BUBBLE_TEXT_MAX_LENGTH = 3000
+    BUBBLE_FONT_SIZE = 16
+    BUBBLE_LINE_HEIGHT = 1.6
+    BUBBLE_BASE_PADDING = 56
+    BUBBLE_MIN_WEIGHTED_CHARS = 6.0
+    BUBBLE_MAX_WEIGHTED_CHARS = 120.0
+    BUBBLE_CHAR_WIDTH_PX = 8.0
+    BUBBLE_LINE_BONUS_PX = 16
+    BUBBLE_MAX_LINE_BONUS_PX = 120
+    BUBBLE_CONTAINER_EXTRA_WIDTH = 90
+
     TMPL = '''
-<div style="display:flex;align-items:flex-start;gap:10px;padding:12px;background:#f5f5f5;">
+<div style="display:inline-flex;align-items:flex-start;gap:10px;padding:12px;background:#f5f5f5;max-width:{{ container_max_width }}px;box-sizing:border-box;">
   <img src="{{ avatar }}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;" />
-  <div style="max-width:560px;">
+  <div style="display:flex;flex-direction:column;align-items:flex-start;max-width:{{ text_container_max_width }}px;">
     <div style="font-size:14px;color:#8c8c8c;line-height:1.4;margin-bottom:6px;">{{ name }}</div>
-    <div style="background:#ffffff;border-radius:0 16px 16px 16px;padding:10px 14px;color:#111111;font-size:16px;line-height:1.6;white-space:pre-wrap;word-break:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.06);">
+    <div style="background:#ffffff;border-radius:0 16px 16px 16px;padding:{{ bubble_padding }};color:#111111;font-size:{{ font_size }}px;line-height:{{ line_height }};white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;box-shadow:0 1px 2px rgba(0,0,0,0.06);width:fit-content;min-width:{{ min_width }}px;max-width:{{ max_width }}px;box-sizing:border-box;">
       {{ text }}
     </div>
   </div>
@@ -119,13 +134,74 @@ class Quote_Plugin(Star):
 
         return ''
 
+    def _weighted_line_length(self, line: str) -> float:
+        total = 0.0
+        for ch in line:
+            if ch == "\t":
+                total += 2.0
+            elif ch.isspace():
+                total += 0.6
+            elif unicodedata.east_asian_width(ch) in {"W", "F"}:
+                total += 2.0
+            else:
+                total += 1.0
+        return total
+
+    def _prepare_render_text(self, value: str | None, *, fallback: str) -> str:
+        value = "" if value is None else str(value)
+        if len(value) > self.BUBBLE_TEXT_MAX_LENGTH:
+            value = value[: self.BUBBLE_TEXT_MAX_LENGTH] + "…"
+        if not value.strip():
+            value = fallback
+        return value
+
+    def _calc_bubble_width(self, text: str) -> tuple[int, int]:
+        lines = text.splitlines()
+        if not lines:
+            lines = [text]
+        longest = max((self._weighted_line_length(line) for line in lines), default=0.0)
+        line_count = max(len(lines), 1)
+        clamped_longest = max(
+            self.BUBBLE_MIN_WEIGHTED_CHARS,
+            min(longest, self.BUBBLE_MAX_WEIGHTED_CHARS),
+        )
+
+        base_width = self.BUBBLE_BASE_PADDING + int(
+            clamped_longest * self.BUBBLE_CHAR_WIDTH_PX
+        )
+        line_bonus = min((line_count - 1) * self.BUBBLE_LINE_BONUS_PX, self.BUBBLE_MAX_LINE_BONUS_PX)
+        preferred_width = base_width + line_bonus
+
+        max_width = max(self.BUBBLE_MIN_WIDTH, min(preferred_width, self.BUBBLE_MAX_WIDTH))
+        min_width = min(self.BUBBLE_MIN_WIDTH, max_width)
+        return min_width, max_width
+
     async def _render_bubble_image(self, group_id, avatar, name, text):
+        safe_name = html.escape(self._prepare_render_text(name, fallback="未知用户"))
+        normalized_text = self._prepare_render_text(text, fallback="（空白内容）")
+        safe_text = html.escape(normalized_text)
+        min_width, max_width = self._calc_bubble_width(normalized_text)
+
         render_data = {
             "avatar": avatar,
-            "name": name,
-            "text": text
+            "name": safe_name,
+            "text": safe_text,
+            "min_width": min_width,
+            "max_width": max_width,
+            "container_max_width": max_width + self.BUBBLE_CONTAINER_EXTRA_WIDTH,
+            "text_container_max_width": max_width,
+            "bubble_padding": "10px 14px",
+            "font_size": self.BUBBLE_FONT_SIZE,
+            "line_height": self.BUBBLE_LINE_HEIGHT
         }
-        image_url = await self.html_render(self.TMPL, render_data)
+        render_options = {
+            "full_page": True,
+            "type": "jpeg",
+            "quality": 60,
+            "animations": "disabled",
+            "caret": "hide"
+        }
+        image_url = await self.html_render(self.TMPL, render_data, options=render_options)
         if not image_url:
             return None
 
