@@ -369,7 +369,7 @@ class Quote_Plugin(Star):
                 "messages": [
                     {
                         "name": self._resolve_speaker_name(speaker_id, speaker_name),
-                        "avatar": self._resolve_avatar_url("" if speaker_id is None else str(speaker_id)),
+                        "avatar": self._resolve_avatar_url(str(speaker_id or "")),
                         "text": final_text,
                     }
                 ]
@@ -605,9 +605,10 @@ class Quote_Plugin(Star):
                         text=reply_text
                     )
                     msg_id = str(event.message_obj.message_id)
-                    bubble_ok = bool(bubble_path) and (
-                        str(bubble_path).startswith(RENDER_OUTPUT_SCHEMES)
-                        or os.path.exists(str(bubble_path))
+                    bubble_path_text = bubble_path if isinstance(bubble_path, str) else (str(bubble_path) if bubble_path is not None else "")
+                    bubble_ok = bool(bubble_path_text) and (
+                        bubble_path_text.startswith(RENDER_OUTPUT_SCHEMES)
+                        or os.path.exists(bubble_path_text)
                     )
                     if bubble_ok:
                         yield event.chain_result([Reply(id=msg_id), Plain(text="⭐入典成功（已生成气泡语录图）！")])
@@ -615,7 +616,7 @@ class Quote_Plugin(Star):
                         if (self.render_config.get("style") or "").strip().lower() in {"off", "none", "disable", "disabled"}:
                             yield event.plain_result("⭐投稿失败：当前已关闭“引用文本转图”渲染，可在配置中开启渲染风格。")
                         else:
-                            yield event.plain_result("⭐投稿失败：生成气泡语录图失败（请检查 html_render 是否可用、模板渲染配置是否完整）")
+                            yield event.plain_result("⭐投稿失败：生成气泡语录图失败(请检查 html_render 是否可用、模板渲染配置是否完整)")
                 except Exception as e:
                     logger.error(f"生成气泡语录图过程出错: {e}")
                     yield event.plain_result(f"⭐投稿失败: {str(e)}")
