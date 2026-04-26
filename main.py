@@ -24,7 +24,7 @@ from quote_collocter_plus.storage import QuoteStorage
     "astrbot_plugin_quote_collocter_plus",
     "ternurarl",
     "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录",
-    "1.5.0",
+    "1.5.1",
 )
 class Quote_Plugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
