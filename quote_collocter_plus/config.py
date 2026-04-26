@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import os
 from typing import Any
 
@@ -84,6 +85,16 @@ def normalize_admin_ids(admins: Any) -> list[str]:
 def normalize_album_name_map(value: Any) -> dict[str, str]:
     if not value:
         return {}
+
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith(("[", "{")):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                parsed = None
+            if isinstance(parsed, (list, dict)):
+                return normalize_album_name_map(parsed)
 
     if isinstance(value, dict):
         entries = value.items()

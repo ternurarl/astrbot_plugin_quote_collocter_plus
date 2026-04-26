@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import os
 from typing import Any
 
@@ -83,8 +84,20 @@ def plugin_album_name_for_group(album_name_config: Any, group_id: str | None) ->
         return ""
 
     value = "" if album_name_config is None else str(album_name_config).strip()
+    if value.startswith(("[", "{")):
+        try:
+            parsed = ast.literal_eval(value)
+        except (SyntaxError, ValueError):
+            parsed = None
+        if isinstance(parsed, (list, dict)):
+            return plugin_album_name_for_group(parsed, group_id)
     if "\n" in value and group_id is not None:
         return plugin_album_name_for_group(value.splitlines(), group_id)
+    if group_id is not None and (":" in value or "：" in value):
+        separator = "：" if "：" in value else ":"
+        item_group_id, item_album_name = value.split(separator, 1)
+        if item_group_id.strip() == str(group_id):
+            return item_album_name.strip()
     return value
 
 
