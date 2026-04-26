@@ -10,11 +10,10 @@ except Exception:  # pragma: no cover - only used outside an AstrBot runtime.
     AiocqhttpMessageEvent = None
 
 
-def format_group_id_for_api(group_id: Any) -> int | Any:
-    try:
-        return int(group_id)
-    except (TypeError, ValueError):
-        return group_id
+def format_group_id_for_api(group_id: Any) -> str:
+    if group_id is None:
+        return ""
+    return str(group_id).strip()
 
 
 class OneBotClient:

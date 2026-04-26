@@ -8,6 +8,35 @@ from .models import PluginSettings
 
 
 BUBBLE_TEXT_MAX_LENGTH = 3000
+QUOTE_PAIRS = {
+    "'": "'",
+    '"': '"',
+    "“": "”",
+    "‘": "’",
+}
+
+
+def strip_wrapping_quotes(value: str) -> str:
+    text = value.strip()
+    while len(text) >= 2 and QUOTE_PAIRS.get(text[0]) == text[-1]:
+        text = text[1:-1].strip()
+    return text
+
+
+def parse_literal_config(value: str) -> Any:
+    text = strip_wrapping_quotes(value)
+    if not text.startswith(("[", "{")):
+        return None
+    candidates = [
+        text,
+        text.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'"),
+    ]
+    for candidate in candidates:
+        try:
+            return ast.literal_eval(candidate)
+        except (SyntaxError, ValueError):
+            continue
+    return None
 
 
 def coerce_bool(value: Any, default: bool = False) -> bool:
@@ -87,16 +116,13 @@ def normalize_album_name_map(value: Any) -> dict[str, str]:
         return {}
 
     if isinstance(value, str):
-        text = value.strip()
-        if text.startswith(("[", "{")):
-            try:
-                parsed = ast.literal_eval(text)
-            except (SyntaxError, ValueError):
-                parsed = None
-            if isinstance(parsed, (list, dict)):
-                return normalize_album_name_map(parsed)
+        text = strip_wrapping_quotes(value)
+        parsed = parse_literal_config(text)
+        if isinstance(parsed, (list, dict)):
+            return normalize_album_name_map(parsed)
         if "\n" in text:
             return normalize_album_name_map(text.splitlines())
+        value = text
 
     if isinstance(value, dict):
         entries = value.items()
@@ -128,14 +154,11 @@ def normalize_album_name_map(value: Any) -> dict[str, str]:
             text = str(item).strip()
             if not text:
                 continue
-            if text.startswith(("[", "{")):
-                try:
-                    parsed = ast.literal_eval(text)
-                except (SyntaxError, ValueError):
-                    parsed = None
-                if isinstance(parsed, (list, dict)):
-                    parsed_entries.extend(normalize_album_name_map(parsed).items())
-                    continue
+            text = strip_wrapping_quotes(text)
+            parsed = parse_literal_config(text)
+            if isinstance(parsed, (list, dict)):
+                parsed_entries.extend(normalize_album_name_map(parsed).items())
+                continue
             separator = "：" if "：" in text else ":"
             if separator not in text:
                 continue

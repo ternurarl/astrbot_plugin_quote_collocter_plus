@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import ast
 import os
 from typing import Any
 
-from .config import coerce_bool
+from .config import coerce_bool, parse_literal_config, strip_wrapping_quotes
 from .models import AlbumSettings, GroupContext, PluginSettings
 from .onebot import OneBotClient, format_group_id_for_api
 from .storage import QuoteStorage
@@ -74,17 +73,13 @@ def plugin_album_name_for_group(album_name_config: Any, group_id: str | None) ->
                     return str(item_album_name).strip()
                 continue
 
-            text = str(item).strip()
-            if text.startswith(("[", "{")):
-                try:
-                    parsed = ast.literal_eval(text)
-                except (SyntaxError, ValueError):
-                    parsed = None
-                if isinstance(parsed, (list, dict)):
-                    album_name = plugin_album_name_for_group(parsed, group_id)
-                    if album_name:
-                        return album_name
-                    continue
+            text = strip_wrapping_quotes(str(item))
+            parsed = parse_literal_config(text)
+            if isinstance(parsed, (list, dict)):
+                album_name = plugin_album_name_for_group(parsed, group_id)
+                if album_name:
+                    return album_name
+                continue
             separator = "：" if "：" in text else ":"
             if separator not in text:
                 continue
@@ -93,14 +88,10 @@ def plugin_album_name_for_group(album_name_config: Any, group_id: str | None) ->
                 return item_album_name.strip()
         return ""
 
-    value = "" if album_name_config is None else str(album_name_config).strip()
-    if value.startswith(("[", "{")):
-        try:
-            parsed = ast.literal_eval(value)
-        except (SyntaxError, ValueError):
-            parsed = None
-        if isinstance(parsed, (list, dict)):
-            return plugin_album_name_for_group(parsed, group_id)
+    value = "" if album_name_config is None else strip_wrapping_quotes(str(album_name_config))
+    parsed = parse_literal_config(value)
+    if isinstance(parsed, (list, dict)):
+        return plugin_album_name_for_group(parsed, group_id)
     if "\n" in value and group_id is not None:
         return plugin_album_name_for_group(value.splitlines(), group_id)
     if group_id is not None and (":" in value or "：" in value):
