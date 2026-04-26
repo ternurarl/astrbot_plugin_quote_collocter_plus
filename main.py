@@ -1,6 +1,13 @@
+import sys
+from pathlib import Path
+
 from astrbot import logger
 from astrbot.api import AstrBotConfig
 from astrbot.api.all import *
+
+PLUGIN_DIR = Path(__file__).resolve().parent
+if str(PLUGIN_DIR) not in sys.path:
+    sys.path.insert(0, str(PLUGIN_DIR))
 
 from quote_collocter_plus.album import AlbumService
 from quote_collocter_plus.commands import CommandHandler
