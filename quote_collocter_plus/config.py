@@ -95,6 +95,8 @@ def normalize_album_name_map(value: Any) -> dict[str, str]:
                 parsed = None
             if isinstance(parsed, (list, dict)):
                 return normalize_album_name_map(parsed)
+        if "\n" in text:
+            return normalize_album_name_map(text.splitlines())
 
     if isinstance(value, dict):
         entries = value.items()
@@ -126,6 +128,14 @@ def normalize_album_name_map(value: Any) -> dict[str, str]:
             text = str(item).strip()
             if not text:
                 continue
+            if text.startswith(("[", "{")):
+                try:
+                    parsed = ast.literal_eval(text)
+                except (SyntaxError, ValueError):
+                    parsed = None
+                if isinstance(parsed, (list, dict)):
+                    parsed_entries.extend(normalize_album_name_map(parsed).items())
+                    continue
             separator = "：" if "：" in text else ":"
             if separator not in text:
                 continue

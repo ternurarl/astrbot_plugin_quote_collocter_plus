@@ -75,6 +75,16 @@ def plugin_album_name_for_group(album_name_config: Any, group_id: str | None) ->
                 continue
 
             text = str(item).strip()
+            if text.startswith(("[", "{")):
+                try:
+                    parsed = ast.literal_eval(text)
+                except (SyntaxError, ValueError):
+                    parsed = None
+                if isinstance(parsed, (list, dict)):
+                    album_name = plugin_album_name_for_group(parsed, group_id)
+                    if album_name:
+                        return album_name
+                    continue
             separator = "：" if "：" in text else ":"
             if separator not in text:
                 continue
@@ -119,11 +129,16 @@ def effective_album_settings(
             return ""
         return str(value).strip()
 
+    def get_album_name(default: str) -> str:
+        if "album_name" not in group_settings:
+            return default
+        return plugin_album_name_for_group(group_settings.get("album_name"), group_id)
+
     plugin_album_name = plugin_album_name_for_group(plugin_settings.album_name, group_id)
 
     return AlbumSettings(
         enabled=get_bool("album_upload_enabled", plugin_settings.enable_album_upload),
-        album_name=get_str("album_name", plugin_album_name),
+        album_name=get_album_name(plugin_album_name),
         album_id=get_str("album_id", plugin_settings.album_id),
         strict=get_bool("album_upload_strict", plugin_settings.album_upload_strict),
         base64_fallback=get_bool(
