@@ -81,6 +81,56 @@ def normalize_admin_ids(admins: Any) -> list[str]:
     return [str(admin).strip() for admin in admins if str(admin).strip()]
 
 
+def normalize_album_name_map(value: Any) -> dict[str, str]:
+    if not value:
+        return {}
+
+    if isinstance(value, dict):
+        entries = value.items()
+    else:
+        if isinstance(value, (str, int)):
+            text = str(value).strip()
+            if text and ":" not in text and "：" not in text:
+                return {"*": text}
+            value = [value]
+        entries = []
+        parsed_entries: list[tuple[Any, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                group_id = (
+                    item.get("group_id")
+                    or item.get("group")
+                    or item.get("群号")
+                    or item.get("qq_group")
+                )
+                album_name = (
+                    item.get("album_name")
+                    or item.get("name")
+                    or item.get("相册名")
+                    or item.get("群相册名")
+                )
+                parsed_entries.append((group_id, album_name))
+                continue
+
+            text = str(item).strip()
+            if not text:
+                continue
+            separator = "：" if "：" in text else ":"
+            if separator not in text:
+                continue
+            group_id, album_name = text.split(separator, 1)
+            parsed_entries.append((group_id, album_name))
+        entries = parsed_entries
+
+    album_names: dict[str, str] = {}
+    for group_id, album_name in entries:
+        group = str(group_id).strip() if group_id is not None else ""
+        name = str(album_name).strip() if album_name is not None else ""
+        if group and name:
+            album_names[group] = name
+    return album_names
+
+
 def load_plugin_settings(
     config: dict[str, Any] | None,
     global_config: dict[str, Any] | None = None,
@@ -124,7 +174,7 @@ def load_plugin_settings(
             min_value=1,
         ),
         enable_album_upload=get_config_bool(config, "enable_album_upload", False),
-        album_name=get_config_str(config, "album_name", ""),
+        album_name=normalize_album_name_map(config.get("album_name", [])),
         album_id=get_config_str(config, "album_id", ""),
         album_upload_strict=get_config_bool(config, "album_upload_strict", False),
         album_upload_use_base64_fallback=get_config_bool(

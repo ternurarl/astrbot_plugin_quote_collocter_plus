@@ -14,7 +14,7 @@ class PluginSettings:
     allow_text_quote_render: bool
     text_quote_max_length: int
     enable_album_upload: bool
-    album_name: str
+    album_name: str | dict[str, str]
     album_id: str
     album_upload_strict: bool
     album_upload_use_base64_fallback: bool
@@ -46,4 +46,3 @@ class RenderNode:
     avatar: str
     text: str = ""
     images: list[str] = field(default_factory=list)
-

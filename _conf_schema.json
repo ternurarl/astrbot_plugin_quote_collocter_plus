@@ -65,10 +65,10 @@
     "default": false
   },
   "album_name": {
-    "description": "目标群相册名称",
-    "type": "string",
-    "hint": "可填写群相册名称，插件会尝试通过 get_qun_album_list 查找对应 album_id。也可在群内用“语录相册 名称 相册名”覆盖。",
-    "default": ""
+    "description": "目标群相册名称列表",
+    "type": "list",
+    "hint": "按“群号:群相册名”填写，每行或每项对应一个群，例如 123456:黑历史。插件会根据当前群号选择相册名，并尝试通过 get_qun_album_list 查找对应 album_id。也可在群内用“语录相册 名称 相册名”覆盖。",
+    "default": []
   },
   "album_id": {
     "description": "目标群相册ID",
