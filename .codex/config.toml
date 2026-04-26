@@ -1,3 +1,0 @@
-[mcp_servers.NapCat_API_Doc]
-command = "cmd"
-args = ["/c", "npx", "-y", "apifox-mcp-server@latest", "--site-id=5348325"]
