@@ -9,15 +9,16 @@ import re
 import uuid
 import html
 import unicodedata
+from pathlib import Path
 from PIL import Image as PILImage
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from astrbot import logger
 from astrbot.api import AstrBotConfig
-from astrbot.core.message.components import Image, Reply, At, Plain
+from astrbot.core.message.components import Forward, Image, Json, Node, Nodes, Reply, At, Plain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.api.all import *
 
-@register("astrbot_plugin_quote_collocter_plus", "ternurarl", "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.4.1")
+@register("astrbot_plugin_quote_collocter_plus", "ternurarl", "发送\"语录投稿+图片\"或\"入典+图片\"，也可回复图片发送\"语录投稿\"或\"入典\"来存储黑历史！发送\"/语录\"随机查看一条。bot会在被戳一戳时随机发送一张语录", "1.4.2")
 class Quote_Plugin(Star):
     BUBBLE_MIN_WIDTH = 140
     BUBBLE_MAX_WIDTH = 640
@@ -32,6 +33,10 @@ class Quote_Plugin(Star):
     BUBBLE_MAX_LINE_BONUS_PX = 120
     BUBBLE_CONTAINER_EXTRA_WIDTH = 90
     BUBBLE_RENDER_SCALE = 1.5
+    FORWARD_MAX_DEPTH = 3
+    FORWARD_CONTAINER_WIDTH = 720
+    FORWARD_TEXT_MAX_WIDTH = 560
+    FORWARD_IMAGE_MAX_WIDTH = 420
 
     TMPL = '''
 <style>html { margin: 0; padding: 0; background: transparent; width: fit-content; height: fit-content; } body { margin: 0; padding: 0; display: inline-block; background: transparent; width: fit-content; height: fit-content; overflow: hidden; }</style>
@@ -41,6 +46,26 @@ class Quote_Plugin(Star):
     <div style="font-size:14px;color:#8c8c8c;line-height:1.4;margin-bottom:6px;">{{- name -}}</div>
     <div style="display:inline-block;background:#ffffff;border-radius:0 16px 16px 16px;padding:{{ bubble_padding }};color:#111111;font-size:{{ font_size }}px;line-height:{{ line_height }};white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;box-shadow:0 1px 2px rgba(0,0,0,0.06);width:fit-content;min-width:{{ min_width }}px;max-width:{{ max_width }}px;box-sizing:border-box;">{{- text -}}</div>
   </div>
+</div>
+'''
+
+    FORWARD_TMPL = '''
+<style>html { margin: 0; padding: 0; background: transparent; width: fit-content; height: fit-content; } body { margin: 0; padding: 0; display: inline-block; background: transparent; width: fit-content; height: fit-content; overflow: hidden; }</style>
+<div id="forward-card" style="display:flex;flex-direction:column;gap:14px;padding:12px;background:transparent;width:fit-content;max-width:{{ container_max_width }}px;box-sizing:border-box;zoom:{{ render_scale }};">
+{% for node in nodes %}
+  <div style="display:flex;align-items:flex-start;gap:10px;width:fit-content;max-width:{{ container_max_width }}px;">
+    <img src="{{ node.avatar }}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;flex:0 0 40px;" />
+    <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px;max-width:{{ content_max_width }}px;">
+      <div style="font-size:14px;color:#8c8c8c;line-height:1.4;">{{- node.name -}}</div>
+      {% if node.text %}
+      <div style="display:inline-block;background:#ffffff;border-radius:0 16px 16px 16px;padding:10px 14px;color:#111111;font-size:{{ font_size }}px;line-height:{{ line_height }};white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;box-shadow:0 1px 2px rgba(0,0,0,0.06);width:fit-content;min-width:{{ min_width }}px;max-width:{{ text_max_width }}px;box-sizing:border-box;">{{- node.text -}}</div>
+      {% endif %}
+      {% for image in node.images %}
+      <img src="{{ image.src }}" style="display:block;max-width:{{ image_max_width }}px;max-height:520px;border-radius:8px;object-fit:contain;box-shadow:0 1px 2px rgba(0,0,0,0.06);" />
+      {% endfor %}
+    </div>
+  </div>
+{% endfor %}
 </div>
 '''
 
@@ -194,20 +219,799 @@ class Quote_Plugin(Star):
         return value
 
     def _extract_reply_text(self, chain):
-        if isinstance(chain, list):
-            texts = []
-            for part in chain:
-                if part.get('type') == 'text':
-                    text = part.get('data', {}).get('text', '')
-                    if text:
-                        texts.append(text)
-            return ''.join(texts).strip()
+        return (self._extract_plain_text_from_payload(chain) or "").strip()
 
-        if isinstance(chain, str):
-            plain_text = re.sub(r'\[CQ:[^\]]+\]', '', chain)
-            return plain_text.strip()
+    def _unwrap_api_data(self, payload):
+        if isinstance(payload, dict) and "type" not in payload:
+            data = payload.get("data")
+            if isinstance(data, dict):
+                return data
+        return payload if isinstance(payload, dict) else {}
 
-        return ''
+    def _message_chain_from_payload(self, payload):
+        data = self._unwrap_api_data(payload)
+        for key in ("message", "messages"):
+            value = data.get(key)
+            if isinstance(value, (list, str)):
+                return value
+        return None
+
+    def _reply_sender_meta(self, event, reply_msg, reply_comp):
+        data = self._unwrap_api_data(reply_msg)
+        sender = data.get("sender") if isinstance(data, dict) else {}
+        if not isinstance(sender, dict):
+            sender = {}
+
+        sender_id = (
+            sender.get("user_id")
+            or getattr(reply_comp, "sender_id", None)
+            or getattr(reply_comp, "qq", None)
+        )
+        sender_name = (
+            sender.get("card")
+            or sender.get("nickname")
+            or getattr(reply_comp, "sender_nickname", "")
+            or (str(sender_id) if sender_id is not None else "未知用户")
+        )
+        sender_avatar = self._avatar_for_sender(sender_id, event)
+        return sender_id, sender_name, sender_avatar
+
+    def _avatar_for_sender(self, user_id, event):
+        user_id = "" if user_id is None else str(user_id).strip()
+        if user_id and user_id != "0":
+            return f"https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
+        try:
+            return event.get_sender_avatar()
+        except Exception:
+            return ""
+
+    def _cq_unescape(self, value):
+        return html.unescape(str(value))
+
+    def _parse_cq_message_string(self, value):
+        text = "" if value is None else str(value)
+        segments = []
+        cursor = 0
+        for match in re.finditer(r"\[CQ:([^,\]]+)((?:,[^\]]*)?)\]", text):
+            if match.start() > cursor:
+                segments.append({
+                    "type": "text",
+                    "data": {"text": self._cq_unescape(text[cursor:match.start()])}
+                })
+
+            seg_type = match.group(1).strip()
+            data = {}
+            params = match.group(2).lstrip(",")
+            if params:
+                for item in params.split(","):
+                    if "=" not in item:
+                        continue
+                    key, raw_value = item.split("=", 1)
+                    data[key.strip()] = self._cq_unescape(raw_value)
+            segments.append({"type": seg_type, "data": data})
+            cursor = match.end()
+
+        if cursor < len(text):
+            segments.append({
+                "type": "text",
+                "data": {"text": self._cq_unescape(text[cursor:])}
+            })
+        return segments
+
+    def _parse_json_payload(self, value):
+        if isinstance(value, Json):
+            value = value.data
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            raw = value.strip().replace("&#44;", ",")
+            if not raw:
+                return None
+            try:
+                return json.loads(raw)
+            except Exception:
+                return None
+        return None
+
+    def _extract_text_from_multimsg_json(self, value):
+        parsed = self._parse_json_payload(value)
+        if not isinstance(parsed, dict) or parsed.get("app") != "com.tencent.multimsg":
+            return ""
+        config = parsed.get("config")
+        if isinstance(config, dict) and config.get("forward") != 1:
+            return ""
+
+        meta = parsed.get("meta")
+        if not isinstance(meta, dict):
+            return ""
+        detail = meta.get("detail")
+        news_items = detail.get("news") if isinstance(detail, dict) else None
+        if not isinstance(news_items, list):
+            return ""
+
+        texts = []
+        for item in news_items:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text")
+            if isinstance(text, str):
+                cleaned = text.strip().replace("[图片]", "").strip()
+                if cleaned:
+                    texts.append(cleaned)
+        return "\n".join(texts).strip()
+
+    def _extract_forward_id_from_multimsg_json(self, value):
+        parsed = self._parse_json_payload(value)
+        if not isinstance(parsed, dict) or parsed.get("app") != "com.tencent.multimsg":
+            return ""
+        meta = parsed.get("meta")
+        if not isinstance(meta, dict):
+            return ""
+        detail = meta.get("detail")
+        if not isinstance(detail, dict):
+            return ""
+        for key in ("resid", "m_resid", "id"):
+            forward_id = detail.get(key)
+            if forward_id:
+                return str(forward_id).strip()
+        return ""
+
+    def _extract_plain_text_from_payload(self, payload, depth=0):
+        if payload is None or depth > self.FORWARD_MAX_DEPTH + 2:
+            return ""
+        if isinstance(payload, Plain):
+            return payload.text or ""
+        if isinstance(payload, Json):
+            return self._extract_text_from_multimsg_json(payload.data)
+        if isinstance(payload, str):
+            segments = self._parse_cq_message_string(payload)
+            return self._extract_plain_text_from_payload(segments, depth + 1)
+        if isinstance(payload, list):
+            return "".join(
+                self._extract_plain_text_from_payload(part, depth + 1)
+                for part in payload
+            )
+        if isinstance(payload, dict):
+            if "type" in payload:
+                seg_type = str(payload.get("type", "")).lower()
+                seg_data = payload.get("data", {})
+                if not isinstance(seg_data, dict):
+                    seg_data = {}
+                if seg_type in {"text", "plain"}:
+                    return str(seg_data.get("text") or "")
+                if seg_type == "json":
+                    return self._extract_text_from_multimsg_json(seg_data.get("data"))
+                return ""
+
+            data = self._unwrap_api_data(payload)
+            chain = self._message_chain_from_payload(data)
+            if chain is not None:
+                return self._extract_plain_text_from_payload(chain, depth + 1)
+            raw = data.get("raw_message")
+            if isinstance(raw, str):
+                return self._extract_plain_text_from_payload(raw, depth + 1)
+        return ""
+
+    def _extract_first_image_file_id(self, payload, depth=0):
+        if payload is None or depth > self.FORWARD_MAX_DEPTH + 2:
+            return None
+        if isinstance(payload, Image):
+            for candidate in (payload.file, payload.url, payload.path):
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+            return None
+        if isinstance(payload, str):
+            return self._extract_first_image_file_id(self._parse_cq_message_string(payload), depth + 1)
+        if isinstance(payload, list):
+            for part in payload:
+                image_ref = self._extract_first_image_file_id(part, depth + 1)
+                if image_ref:
+                    return image_ref
+            return None
+        if isinstance(payload, dict):
+            if "type" in payload:
+                seg_type = str(payload.get("type", "")).lower()
+                seg_data = payload.get("data", {})
+                if not isinstance(seg_data, dict):
+                    seg_data = {}
+                if seg_type == "image":
+                    for key in ("file", "url", "path"):
+                        value = seg_data.get(key)
+                        if isinstance(value, str) and value.strip():
+                            return value.strip()
+                return None
+
+            data = self._unwrap_api_data(payload)
+            chain = self._message_chain_from_payload(data)
+            if chain is not None:
+                return self._extract_first_image_file_id(chain, depth + 1)
+        return None
+
+    def _image_mime_from_base64(self, payload):
+        sample = payload[:96]
+        sample += "=" * (-len(sample) % 4)
+        try:
+            header = base64.b64decode(sample)
+        except Exception:
+            header = b""
+        if header.startswith(b"\xff\xd8"):
+            return "image/jpeg"
+        if header.startswith(b"\x89PNG"):
+            return "image/png"
+        if header.startswith(b"GIF8"):
+            return "image/gif"
+        if header.startswith(b"RIFF") and b"WEBP" in header[:16]:
+            return "image/webp"
+        return "image/png"
+
+    def _image_extension_from_bytes(self, data):
+        if data.startswith(b"\x89PNG"):
+            return ".png"
+        if data.startswith(b"GIF8"):
+            return ".gif"
+        if data.startswith(b"RIFF") and b"WEBP" in data[:16]:
+            return ".webp"
+        if data.startswith(b"BM"):
+            return ".bmp"
+        return ".jpg"
+
+    def _save_image_bytes(self, data, group_id):
+        if not data:
+            return None
+        filename = f"image_{uuid.uuid4().hex}{self._image_extension_from_bytes(data)}"
+        save_path = os.path.join(self.quotes_data_path, group_id, filename)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        with open(save_path, "wb") as f:
+            f.write(data)
+        logger.info(f"图片已保存到 {save_path}")
+        return save_path
+
+    def _base64_to_data_uri(self, value):
+        payload = str(value).strip()
+        if payload.startswith("base64://"):
+            payload = payload[len("base64://"):]
+        payload = "".join(payload.split())
+        if not payload:
+            return ""
+        return f"data:{self._image_mime_from_base64(payload)};base64,{payload}"
+
+    def _image_src_from_ref(self, image_ref):
+        if image_ref is None:
+            return None
+        raw = str(image_ref).strip()
+        if not raw:
+            return None
+        if raw.startswith("data:"):
+            return raw
+        if raw.startswith("base64://"):
+            return self._base64_to_data_uri(raw)
+        if raw.startswith(("http://", "https://")):
+            return raw
+        if raw.startswith("file://"):
+            local_path = self._path_from_file_uri(raw)
+            if os.path.exists(local_path):
+                return Path(local_path).resolve().as_uri()
+            return raw
+        if os.path.exists(raw):
+            try:
+                return Path(raw).resolve().as_uri()
+            except Exception:
+                return raw
+        return None
+
+    async def _resolve_forward_image_src(self, event, image_ref):
+        src = self._image_src_from_ref(image_ref)
+        if src:
+            return src
+
+        if image_ref is None:
+            return None
+        file_id = str(image_ref).strip()
+        if not file_id:
+            return None
+
+        try:
+            result = await self._call_onebot_action(event, "get_image", file_id=file_id)
+            data = self._unwrap_api_data(result)
+            for key in ("file", "url", "path"):
+                src = self._image_src_from_ref(data.get(key))
+                if src:
+                    return src
+            for key in ("base64", "data"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    if value.startswith("data:"):
+                        return value.strip()
+                    return self._base64_to_data_uri(value)
+        except Exception as e:
+            logger.debug(f"解析合并转发图片失败: {e}, image_ref={file_id}")
+        return None
+
+    async def _save_image_ref_to_local(self, image_ref, group_id):
+        if image_ref is None:
+            return None
+        raw = str(image_ref).strip()
+        if not raw:
+            return None
+
+        try:
+            if raw.startswith("data:") and "," in raw:
+                header, payload = raw.split(",", 1)
+                if ";base64" not in header:
+                    return None
+                return self._save_image_bytes(base64.b64decode(payload), group_id)
+            if raw.startswith("base64://"):
+                payload = "".join(raw[len("base64://"):].split())
+                return self._save_image_bytes(base64.b64decode(payload), group_id)
+
+            local_path = None
+            if raw.startswith("file://"):
+                local_path = self._path_from_file_uri(raw)
+            elif os.path.exists(raw):
+                local_path = raw
+
+            if local_path and os.path.exists(local_path):
+                with open(local_path, "rb") as f:
+                    return self._save_image_bytes(f.read(), group_id)
+
+            if raw.startswith(("http://", "https://")):
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(raw) as response:
+                        if response.status == 200:
+                            return self._save_image_bytes(await response.read(), group_id)
+                        logger.error(f"从URL下载图片失败: HTTP {response.status}")
+        except Exception as e:
+            logger.debug(f"直接保存图片引用失败: {e}, image_ref={raw}")
+        return None
+
+    def _dedupe_strings(self, values):
+        seen = set()
+        result = []
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            value = value.strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result
+
+    def _image_refs_from_segment(self, segment):
+        if isinstance(segment, Image):
+            refs = []
+            for candidate in (segment.url, segment.file, segment.path):
+                if isinstance(candidate, str) and candidate.strip():
+                    refs.append(candidate.strip())
+            return refs
+
+        if not isinstance(segment, dict):
+            return []
+        seg_data = segment.get("data", {})
+        if not isinstance(seg_data, dict):
+            return []
+
+        refs = []
+        for key in ("url", "file", "path"):
+            value = seg_data.get(key)
+            if isinstance(value, str) and value.strip():
+                refs.append(value.strip())
+        for key in ("base64", "data"):
+            value = seg_data.get(key)
+            if isinstance(value, str) and value.strip():
+                value = value.strip()
+                if value.startswith(("base64://", "data:")):
+                    refs.append(value)
+                else:
+                    refs.append(f"base64://{value}")
+        return refs
+
+    def _looks_like_forward_node(self, value):
+        if isinstance(value, Node):
+            return True
+        if not isinstance(value, dict):
+            return False
+        if str(value.get("type", "")).lower() == "node":
+            return True
+        if "type" in value:
+            return False
+        return (
+            isinstance(value.get("sender"), dict)
+            or "content" in value
+            or "message" in value
+        )
+
+    def _forward_node_list_from_payload(self, payload):
+        data = self._unwrap_api_data(payload)
+        for key in ("messages", "message", "nodes", "nodeList"):
+            value = data.get(key)
+            if isinstance(value, list) and any(self._looks_like_forward_node(item) for item in value):
+                return value
+        return None
+
+    async def _fetch_forward_render_nodes(self, event, forward_id, group_id, depth, visited):
+        forward_id = str(forward_id).strip()
+        if not forward_id or forward_id in visited or depth > self.FORWARD_MAX_DEPTH:
+            return []
+        visited.add(forward_id)
+
+        last_error = None
+        for payload in ({"id": forward_id}, {"message_id": forward_id}):
+            try:
+                result = await self._call_onebot_action(event, "get_forward_msg", **payload)
+                nodes = await self._extract_forward_render_nodes(
+                    event,
+                    result,
+                    group_id,
+                    depth=depth + 1,
+                    visited=visited,
+                )
+                if nodes:
+                    return nodes
+            except Exception as e:
+                last_error = e
+                logger.debug(f"获取合并转发消息失败: {e}, payload={payload}")
+
+        if last_error:
+            logger.info(f"无法获取合并转发消息: id={forward_id}, error={last_error}")
+        return []
+
+    async def _extract_forward_render_nodes(self, event, payload, group_id, depth=0, visited=None):
+        if visited is None:
+            visited = set()
+        if payload is None or depth > self.FORWARD_MAX_DEPTH:
+            return []
+
+        if isinstance(payload, Forward):
+            return await self._fetch_forward_render_nodes(event, payload.id, group_id, depth, visited)
+        if isinstance(payload, Nodes):
+            nodes = []
+            for node in payload.nodes:
+                nodes.extend(await self._parse_component_forward_node(event, node, group_id, depth, visited))
+            return nodes
+        if isinstance(payload, Node):
+            return await self._parse_component_forward_node(event, payload, group_id, depth, visited)
+        if isinstance(payload, Json):
+            forward_id = self._extract_forward_id_from_multimsg_json(payload.data)
+            if forward_id:
+                return await self._fetch_forward_render_nodes(event, forward_id, group_id, depth, visited)
+            return []
+        if isinstance(payload, str):
+            return await self._extract_forward_render_nodes(
+                event,
+                self._parse_cq_message_string(payload),
+                group_id,
+                depth=depth + 1,
+                visited=visited,
+            )
+        if isinstance(payload, list):
+            nodes = []
+            for part in payload:
+                nodes.extend(await self._extract_forward_render_nodes(
+                    event,
+                    part,
+                    group_id,
+                    depth=depth,
+                    visited=visited,
+                ))
+            return nodes
+        if not isinstance(payload, dict):
+            return []
+
+        if "type" in payload:
+            return await self._extract_forward_nodes_from_segment(
+                event,
+                payload,
+                group_id,
+                depth,
+                visited,
+            )
+
+        data = self._unwrap_api_data(payload)
+        node_list = self._forward_node_list_from_payload(data)
+        if node_list:
+            nodes = []
+            for node in node_list:
+                nodes.extend(await self._parse_onebot_forward_node(event, node, group_id, depth, visited))
+            return nodes
+
+        chain = self._message_chain_from_payload(data)
+        if chain is not None:
+            return await self._extract_forward_render_nodes(
+                event,
+                chain,
+                group_id,
+                depth=depth + 1,
+                visited=visited,
+            )
+        return []
+
+    async def _extract_forward_nodes_from_segment(self, event, segment, group_id, depth, visited):
+        seg_type = str(segment.get("type", "")).lower()
+        seg_data = segment.get("data", {})
+        if not isinstance(seg_data, dict):
+            seg_data = {}
+
+        if seg_type in {"forward", "forward_msg"}:
+            forward_id = seg_data.get("id") or seg_data.get("message_id")
+            if forward_id:
+                return await self._fetch_forward_render_nodes(event, forward_id, group_id, depth, visited)
+            for key in ("content", "nodes", "messages", "message", "nodeList"):
+                value = seg_data.get(key)
+                if isinstance(value, list):
+                    return await self._extract_forward_render_nodes(
+                        event,
+                        {"nodes": value},
+                        group_id,
+                        depth=depth + 1,
+                        visited=visited,
+                    )
+            return []
+
+        if seg_type == "node":
+            return await self._parse_onebot_forward_node(event, segment, group_id, depth, visited)
+
+        if seg_type == "nodes":
+            node_list = (
+                seg_data.get("nodes")
+                or seg_data.get("content")
+                or seg_data.get("messages")
+                or seg_data.get("message")
+                or seg_data.get("nodeList")
+            )
+            if isinstance(node_list, list):
+                nodes = []
+                for node in node_list:
+                    nodes.extend(await self._parse_onebot_forward_node(event, node, group_id, depth, visited))
+                return nodes
+            return []
+
+        if seg_type == "json":
+            forward_id = self._extract_forward_id_from_multimsg_json(seg_data.get("data"))
+            if forward_id:
+                return await self._fetch_forward_render_nodes(event, forward_id, group_id, depth, visited)
+        return []
+
+    async def _parse_component_forward_node(self, event, node, group_id, depth, visited):
+        text, images, nested_nodes = await self._parse_forward_node_content(
+            event,
+            getattr(node, "content", []),
+            group_id,
+            depth,
+            visited,
+        )
+        current = self._build_forward_render_node(
+            event,
+            name=getattr(node, "name", "") or getattr(node, "uin", ""),
+            user_id=getattr(node, "uin", ""),
+            text=text,
+            images=images,
+        )
+        return current + nested_nodes
+
+    async def _parse_onebot_forward_node(self, event, node, group_id, depth, visited):
+        if isinstance(node, Node):
+            return await self._parse_component_forward_node(event, node, group_id, depth, visited)
+        if not isinstance(node, dict):
+            return []
+
+        raw_node = node.get("data") if str(node.get("type", "")).lower() == "node" else node
+        if not isinstance(raw_node, dict):
+            return []
+
+        sender = raw_node.get("sender")
+        if not isinstance(sender, dict):
+            sender = {}
+        user_id = (
+            sender.get("user_id")
+            or raw_node.get("user_id")
+            or raw_node.get("uin")
+            or raw_node.get("qq")
+        )
+        name = (
+            sender.get("card")
+            or sender.get("nickname")
+            or raw_node.get("nickname")
+            or raw_node.get("name")
+            or (str(user_id) if user_id is not None else "未知用户")
+        )
+
+        content = raw_node.get("message")
+        if content is None:
+            content = raw_node.get("content")
+        if content is None:
+            content = raw_node.get("messages")
+
+        text, images, nested_nodes = await self._parse_forward_node_content(
+            event,
+            content,
+            group_id,
+            depth,
+            visited,
+        )
+        current = self._build_forward_render_node(
+            event,
+            name=name,
+            user_id=user_id,
+            text=text,
+            images=images,
+        )
+        return current + nested_nodes
+
+    async def _parse_forward_node_content(self, event, content, group_id, depth, visited):
+        text_parts = []
+        images = []
+        nested_nodes = []
+
+        async def consume(item):
+            if item is None:
+                return
+            if isinstance(item, Plain):
+                if item.text:
+                    text_parts.append(item.text)
+                return
+            if isinstance(item, At):
+                target = item.name or item.qq
+                if target:
+                    text_parts.append(f"@{target}")
+                return
+            if isinstance(item, Image):
+                for image_ref in self._image_refs_from_segment(item):
+                    src = await self._resolve_forward_image_src(event, image_ref)
+                    if src:
+                        images.append(src)
+                return
+            if isinstance(item, (Forward, Node, Nodes, Json)):
+                nested_nodes.extend(await self._extract_forward_render_nodes(
+                    event,
+                    item,
+                    group_id,
+                    depth=depth + 1,
+                    visited=visited,
+                ))
+                return
+            if isinstance(item, str):
+                raw = item.strip()
+                if not raw:
+                    return
+                parsed = None
+                if raw[0] in "[{":
+                    try:
+                        parsed = json.loads(raw.replace("&#44;", ","))
+                    except Exception:
+                        parsed = None
+                if isinstance(parsed, (list, dict)):
+                    await consume(parsed)
+                else:
+                    await consume(self._parse_cq_message_string(raw))
+                return
+            if isinstance(item, list):
+                for part in item:
+                    await consume(part)
+                return
+            if not isinstance(item, dict):
+                return
+
+            if "type" in item:
+                seg_type = str(item.get("type", "")).lower()
+                seg_data = item.get("data", {})
+                if not isinstance(seg_data, dict):
+                    seg_data = {}
+
+                if seg_type in {"text", "plain"}:
+                    text = seg_data.get("text")
+                    if isinstance(text, str) and text:
+                        text_parts.append(text)
+                    return
+                if seg_type == "at":
+                    target = seg_data.get("name") or seg_data.get("qq")
+                    if target:
+                        text_parts.append(f"@{target}")
+                    return
+                if seg_type == "image":
+                    for image_ref in self._image_refs_from_segment(item):
+                        src = await self._resolve_forward_image_src(event, image_ref)
+                        if src:
+                            images.append(src)
+                    return
+                if seg_type in {"forward", "forward_msg", "node", "nodes", "json"}:
+                    nested_nodes.extend(await self._extract_forward_render_nodes(
+                        event,
+                        item,
+                        group_id,
+                        depth=depth + 1,
+                        visited=visited,
+                    ))
+                    return
+                return
+
+            if self._looks_like_forward_node(item):
+                nested_nodes.extend(await self._parse_onebot_forward_node(event, item, group_id, depth + 1, visited))
+                return
+
+            for key in ("message", "content", "messages"):
+                value = item.get(key)
+                if isinstance(value, (list, str, dict)):
+                    await consume(value)
+                    return
+
+        await consume(content)
+        return "".join(text_parts).strip(), self._dedupe_strings(images), nested_nodes
+
+    def _build_forward_render_node(self, event, name, user_id, text, images):
+        text = "" if text is None else str(text).strip()
+        images = self._dedupe_strings(images)
+        if not text and not images:
+            return []
+        name = "" if name is None else str(name).strip()
+        user_id = "" if user_id is None else str(user_id).strip()
+        if not name:
+            name = user_id or "未知用户"
+        return [{
+            "name": name,
+            "avatar": self._avatar_for_sender(user_id, event),
+            "text": text,
+            "images": images,
+        }]
+
+    def _prepare_forward_render_nodes(self, nodes):
+        prepared = []
+        remaining = self.BUBBLE_TEXT_MAX_LENGTH
+
+        for node in nodes:
+            text = "" if node.get("text") is None else str(node.get("text")).strip()
+            if text:
+                if remaining <= 0:
+                    text = ""
+                elif len(text) > remaining:
+                    text = text[:remaining] + "…"
+                    remaining = 0
+                else:
+                    remaining -= len(text)
+
+            images = [
+                {"src": html.escape(src, quote=True)}
+                for src in self._dedupe_strings(node.get("images", []))
+            ]
+            if not text and not images:
+                continue
+
+            prepared.append({
+                "name": html.escape(self._prepare_render_text(node.get("name"), fallback="未知用户")),
+                "avatar": html.escape(str(node.get("avatar") or ""), quote=True),
+                "text": html.escape(text) if text else "",
+                "images": images,
+            })
+
+        return prepared
+
+    async def _render_forward_image(self, group_id, nodes):
+        render_nodes = self._prepare_forward_render_nodes(nodes)
+        if not render_nodes:
+            return None
+
+        render_data = {
+            "nodes": render_nodes,
+            "container_max_width": self.FORWARD_CONTAINER_WIDTH,
+            "content_max_width": max(self.FORWARD_TEXT_MAX_WIDTH, self.FORWARD_IMAGE_MAX_WIDTH),
+            "text_max_width": self.FORWARD_TEXT_MAX_WIDTH,
+            "image_max_width": self.FORWARD_IMAGE_MAX_WIDTH,
+            "min_width": self.BUBBLE_MIN_WIDTH,
+            "font_size": self.BUBBLE_FONT_SIZE,
+            "line_height": self.BUBBLE_LINE_HEIGHT,
+            "render_scale": self.BUBBLE_RENDER_SCALE,
+        }
+        render_options = {
+            "full_page": True,
+            "type": "png",
+            "omit_background": True,
+            "animations": "disabled",
+            "caret": "hide"
+        }
+        image_url = await self.html_render(self.FORWARD_TMPL, render_data, return_url=False, options=render_options)
+        if not image_url:
+            return None
+        return await self._save_rendered_image(group_id, image_url)
 
     def _weighted_line_length(self, line: str) -> float:
         total = 0.0
@@ -286,6 +1090,66 @@ class Quote_Plugin(Star):
             return (min_x, min_y, max_x + 1, max_y + 1), 24
         return alpha_bbox, 8
 
+    def _path_from_file_uri(self, uri: str) -> str:
+        parsed = urlparse(uri)
+        path = unquote(parsed.path)
+        if os.name == "nt" and re.match(r"^/[A-Za-z]:", path):
+            path = path[1:]
+        return path
+
+    async def _save_rendered_image(self, group_id, image_url):
+        filename = f"image_{uuid.uuid4().hex}.png"
+        save_path = os.path.join(self.quotes_data_path, group_id, filename)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+        try:
+            is_saved = False
+            if os.path.exists(image_url):
+                with open(image_url, "rb") as src, open(save_path, "wb") as dst:
+                    dst.write(src.read())
+                is_saved = True
+            else:
+                parsed = urlparse(image_url)
+                if parsed.scheme == "file":
+                    local_path = self._path_from_file_uri(image_url)
+                    if os.path.exists(local_path):
+                        with open(local_path, "rb") as src, open(save_path, "wb") as dst:
+                            dst.write(src.read())
+                        is_saved = True
+                elif image_url.startswith("http://") or image_url.startswith("https://"):
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(image_url) as response:
+                            if response.status == 200:
+                                with open(save_path, "wb") as f:
+                                    f.write(await response.read())
+                                is_saved = True
+
+            if is_saved:
+                with PILImage.open(save_path) as img:
+                    rgba = img.convert("RGBA")
+                    bbox, pad = self._find_render_bbox(rgba)
+
+                    if bbox:
+                        crop_box = (
+                            max(0, bbox[0] - pad),
+                            max(0, bbox[1] - pad),
+                            min(rgba.width, bbox[2] + pad),
+                            min(rgba.height, bbox[3] + pad)
+                        )
+                        cropped = rgba.crop(crop_box)
+
+                        bg = PILImage.new("RGB", cropped.size, (255, 255, 255))
+                        bg.paste(cropped, mask=cropped.getchannel("A"))
+                        bg.save(save_path, "PNG", optimize=True)
+                    else:
+                        rgba.convert("RGB").save(save_path, "PNG", optimize=True)
+
+                return save_path
+
+        except Exception as e:
+            logger.error(f"保存或裁剪渲染图片失败: {e}, image_url={image_url}")
+        return None
+
     async def _render_bubble_image(self, group_id, avatar, name, text):
         safe_name = html.escape(self._prepare_render_text(name, fallback="未知用户"))
         normalized_text = self._prepare_render_text(text, fallback="（空白内容）")
@@ -316,59 +1180,7 @@ class Quote_Plugin(Star):
         if not image_url:
             return None
 
-        filename = f"image_{uuid.uuid4().hex}.png"
-        save_path = os.path.join(self.quotes_data_path, group_id, filename)
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-        try:
-            is_saved = False
-            # 1. 统一处理本地或远程的图片获取
-            if os.path.exists(image_url):
-                with open(image_url, "rb") as src, open(save_path, "wb") as dst:
-                    dst.write(src.read())
-                is_saved = True
-            else:
-                parsed = urlparse(image_url)
-                if parsed.scheme == "file" and os.path.exists(parsed.path):
-                    with open(parsed.path, "rb") as src, open(save_path, "wb") as dst:
-                        dst.write(src.read())
-                    is_saved = True
-                elif image_url.startswith("http://") or image_url.startswith("https://"):
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(image_url) as response:
-                            if response.status == 200:
-                                with open(save_path, "wb") as f:
-                                    f.write(await response.read())
-                                is_saved = True
-
-            # 2. 图片获取成功后，执行精准裁剪
-            if is_saved:
-                with PILImage.open(save_path) as img:
-                    rgba = img.convert("RGBA")
-                    bbox, pad = self._find_render_bbox(rgba)
-
-                    if bbox:
-                        crop_box = (
-                            max(0, bbox[0] - pad), 
-                            max(0, bbox[1] - pad),
-                            min(rgba.width, bbox[2] + pad), 
-                            min(rgba.height, bbox[3] + pad)
-                        )
-                        cropped = rgba.crop(crop_box)
-
-                        # 使用 PNG 保存，避免 JPEG 压缩让小字号文字和头像发糊
-                        bg = PILImage.new("RGB", cropped.size, (255, 255, 255))
-                        bg.paste(cropped, mask=cropped.getchannel("A"))
-                        bg.save(save_path, "PNG", optimize=True)
-                    else:
-                        # 兜底转换
-                        rgba.convert("RGB").save(save_path, "PNG", optimize=True)
-                
-                return save_path
-
-        except Exception as e:
-            logger.error(f"保存或裁剪渲染图片失败: {e}, image_url={image_url}")
-        return None
+        return await self._save_rendered_image(group_id, image_url)
 
     #region 群相册上传
     def _format_group_id_for_api(self, group_id):
@@ -670,6 +1482,10 @@ class Quote_Plugin(Star):
             assert isinstance(event, AiocqhttpMessageEvent)
             client = event.bot
 
+            direct_path = await self._save_image_ref_to_local(file_id, group_id)
+            if direct_path:
+                return direct_path
+
             payloads = {
                 "file_id": file_id
             }
@@ -851,29 +1667,40 @@ class Quote_Plugin(Star):
                     try:
                         logger.info(f"检测到引用回复，尝试获取消息ID: {reply_comp.id}")
                         reply_id = int(reply_comp.id) if str(reply_comp.id).isdigit() else reply_comp.id
-                        reply_msg = await event.bot.api.call_action('get_msg', message_id=reply_id)
-                        
-                        if reply_msg and 'message' in reply_msg:
-                            chain = reply_msg['message']
-                            if isinstance(chain, list):
-                                for part in chain:
-                                    if part.get('type') == 'image':
-                                        file_id = part.get('data', {}).get('file')
-                                        break
-                            elif isinstance(chain, str):
-                                match = re.search(r'\[CQ:image,[^\]]*file=([^,\]]+)', chain)
-                                if match:
-                                    file_id = match.group(1)
+                        reply_msg = None
+                        try:
+                            reply_msg = await self._call_onebot_action(event, 'get_msg', message_id=reply_id)
+                        except Exception as e:
+                            logger.debug(f"通过 get_msg 获取引用消息失败，将尝试使用 Reply.chain: {e}")
 
-                            if not file_id and self.allow_text_quote_render:
+                        chain = self._message_chain_from_payload(reply_msg)
+                        if chain is None:
+                            chain = getattr(reply_comp, "chain", None)
+
+                        file_id = self._extract_first_image_file_id(chain)
+
+                        if not file_id and self.allow_text_quote_render:
+                            forward_nodes = await self._extract_forward_render_nodes(event, chain, group_id)
+                            if not forward_nodes and chain is not getattr(reply_comp, "chain", None):
+                                forward_nodes = await self._extract_forward_render_nodes(
+                                    event,
+                                    getattr(reply_comp, "chain", None),
+                                    group_id,
+                                )
+
+                            if forward_nodes:
+                                rendered_path = await self._render_forward_image(group_id, forward_nodes)
+
+                            if not rendered_path:
                                 reply_text = self._extract_reply_text(chain)
+                                if not reply_text:
+                                    reply_text = str(getattr(reply_comp, "message_str", "") or "").strip()
                                 if reply_text:
-                                    sender = reply_msg.get("sender", {}) if isinstance(reply_msg, dict) else {}
-                                    sender_id = sender.get("user_id")
-                                    sender_card = sender.get("card")
-                                    sender_nickname = sender.get("nickname")
-                                    sender_name = sender_card or sender_nickname or (str(sender_id) if sender_id is not None else "未知用户")
-                                    sender_avatar = f"https://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=640" if sender_id else event.get_sender_avatar()
+                                    _, sender_name, sender_avatar = self._reply_sender_meta(
+                                        event,
+                                        reply_msg,
+                                        reply_comp,
+                                    )
                                     rendered_path = await self._render_bubble_image(
                                         group_id=group_id,
                                         avatar=sender_avatar,
