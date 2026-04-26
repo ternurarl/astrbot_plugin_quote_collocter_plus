@@ -25,3 +25,6 @@ logs/
 output-playground-*.png
 output-t2i-*.jpg
 output-t2i-*.png
+
+#codex
+.codex/
