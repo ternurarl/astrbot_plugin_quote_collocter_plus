@@ -1,6 +1,27 @@
 __pycache__/
 *.py[cod]
+
+# Local Python environments and tooling
+.venv/
+.python-version
+pyproject.toml
+uv.lock
+
+# Test and analysis output
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# AstrBot/runtime generated data
+data/
+logs/
+*.log
+
+# Frontend/browser tooling caches
 .npm-cache/
+
+# Local render/debug outputs
 output-playground-*.png
 output-t2i-*.jpg
 output-t2i-*.png
