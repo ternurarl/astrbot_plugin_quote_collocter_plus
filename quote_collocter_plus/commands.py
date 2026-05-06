@@ -67,13 +67,65 @@ class CommandHandler:
                 return match.group()
         return None
 
-    async def handle_group_message(self, event: Any) -> AsyncIterator[Any]:
+    def group_command_context(self, event: Any) -> tuple[str, str, GroupContext]:
         group_id = str(event.message_obj.group_id)
         user_id = str(event.get_sender_id())
+        return group_id, user_id, self.storage.load_group_context(group_id)
+
+    async def handle_registered_command(
+        self,
+        event: Any,
+        command_name: str,
+        msg: str | None = None,
+    ) -> AsyncIterator[Any]:
+        _, user_id, group_context = self.group_command_context(event)
+        command_text = (msg or command_name).strip()
+
+        if command_name == "投稿权限":
+            async for result in self._handle_permission_command(
+                event,
+                group_context,
+                user_id,
+                command_text,
+            ):
+                yield result
+            return
+
+        if command_name == "语录相册":
+            async for result in self._handle_album_command(
+                event,
+                group_context,
+                user_id,
+                command_text,
+            ):
+                yield result
+            return
+
+        if command_name == "戳戳冷却":
+            async for result in self._handle_cooldown_command(
+                event,
+                group_context,
+                user_id,
+                command_text,
+            ):
+                yield result
+            return
+
+        if command_name == "语录":
+            async for result in self._handle_random_quote(event, group_context):
+                yield result
+            return
+
+        if command_name in {"入典", "语录投稿"}:
+            async for result in self._handle_submission(event, group_context, user_id):
+                yield result
+            return
+
+    async def handle_group_message(self, event: Any) -> AsyncIterator[Any]:
+        _, user_id, group_context = self.group_command_context(event)
         message_obj = event.message_obj
         raw_message = message_obj.raw_message
         msg = event.message_str.strip()
-        group_context = self.storage.load_group_context(group_id)
 
         if msg.startswith("投稿权限"):
             async for result in self._handle_permission_command(event, group_context, user_id, msg):
